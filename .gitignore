@@ -1,0 +1,30 @@
+# System files
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+/venv/
+/env/
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Data files
+data/processed/
+data/raw/injuries_*.parquet
+data/raw/contracts.csv
+data/raw/snaps.parquet
+data/raw/vegas_adp.parquet
+outputs/
+
+# IDEs
+.idea/
+.vscode/ 
