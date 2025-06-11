@@ -1,0 +1,40 @@
+name: sfb15-projections
+channels:
+  - conda-forge
+dependencies:
+  # --- Core ---
+  - python=3.10
+  - pip
+
+  # --- Data Handling ---
+  - pandas
+  - numpy
+  - pyarrow  # For Parquet support
+
+  # --- Machine Learning ---
+  - scikit-learn
+  - catboost
+  - lightgbm
+  - optuna  # For hyperparameter tuning
+  - mlflow  # For experiment tracking
+
+  # --- Visualization & EDA ---
+  - jupyterlab
+  - matplotlib
+  - seaborn
+  - plotly
+
+  # --- Web Scraping & APIs ---
+  - requests
+  - beautifulsoup4
+  - fastapi
+  - uvicorn
+
+  # --- Code Quality ---
+  - black
+  - ruff
+  - pre-commit
+
+  # --- Pip-installed packages ---
+  - pip:
+    - nfl-data-py  # Useful library for NFL data 
