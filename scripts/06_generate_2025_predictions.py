@@ -257,12 +257,12 @@ class Fantasy2025Projector:
         """Apply manual adjustments to ML predictions for realism"""
         adjusted_predictions = predictions.copy()
         
-        # Position-specific caps (based on 2024 elite performance)
+        # Position-specific caps (based on realistic 2024 elite performance)
         position_caps = {
-            'QB': 700,  # Elite QBs like Allen can reach 650+ 
-            'RB': 900,  # Elite RBs like Barkley can reach 850+
-            'WR': 750,  # Elite WRs like Chase can reach 680+
-            'TE': 600   # Elite TEs like Kelce can reach 560+
+            'QB': 600,  # Elite QBs like Allen, Jackson ~580-600
+            'RB': 550,  # Elite RBs like Barkley, Henry ~500-550  
+            'WR': 500,  # Elite WRs like Chase, Jefferson ~450-500
+            'TE': 450   # Elite TEs like Kelce ~400-450
         }
         
         # Apply position cap
@@ -386,43 +386,57 @@ class Fantasy2025Projector:
         )
         
         # Create tiers within each position
-        def assign_tiers(group):
-            sorted_group = group.sort_values('projected_points', ascending=False)
+        def assign_tiers(group, position):
+            sorted_group = group.sort_values('projected_points', ascending=False).reset_index(drop=True)
             n_players = len(sorted_group)
             
-            # Define tier sizes (approximate)
-            if group.name == 'QB':
-                tier_sizes = [12, 12, 8]  # QB1, QB2, QB3
-            elif group.name in ['RB', 'WR']:
-                tier_sizes = [12, 12, 12, 12]  # RB1/WR1, RB2/WR2, etc.
+            # Define tier sizes - tier 1 should be the BEST players
+            if position == 'QB':
+                tier_sizes = [3, 9, 12, 32]  # Elite QB1 (top 3), QB1 (4-12), QB2 (13-24), Backup (rest)
+            elif position in ['RB', 'WR']:
+                tier_sizes = [6, 12, 12, 24, 32]  # Elite (top 6), Tier 1 (7-18), Tier 2 (19-30), Tier 3 (31-54), Deep (rest)
             else:  # TE
-                tier_sizes = [12, 12]  # TE1, TE2
+                tier_sizes = [3, 9, 12, 32]  # Elite TE1 (top 3), TE1 (4-12), Streamer (13-24), Deep (rest)
             
-            tiers = []
+            # Create tier array - assign tier number based on position in sorted list
+            tiers = [0] * n_players
             start_idx = 0
             
             for tier_num, tier_size in enumerate(tier_sizes, 1):
                 end_idx = min(start_idx + tier_size, n_players)
-                tiers.extend([tier_num] * (end_idx - start_idx))
+                for i in range(start_idx, end_idx):
+                    tiers[i] = tier_num
                 start_idx = end_idx
                 
                 if start_idx >= n_players:
                     break
             
-            # Remaining players get the last tier + 1
-            if len(tiers) < n_players:
-                tiers.extend([len(tier_sizes) + 1] * (n_players - len(tiers)))
+            # Remaining players get the last tier number
+            for i in range(start_idx, n_players):
+                tiers[i] = len(tier_sizes)
             
-            return pd.Series(tiers, index=sorted_group.index)
+            # Map back to original index
+            result = pd.Series(index=group.index, dtype=int)
+            for i, orig_idx in enumerate(sorted_group.index):
+                result[orig_idx] = tiers[i]
+            
+            return result
         
-        self.predictions_2025['tier'] = self.predictions_2025.groupby('position').apply(assign_tiers).values
+        # Apply tier assignment to each position
+        self.predictions_2025['tier'] = 0  # Initialize
+        for position in ['QB', 'RB', 'WR', 'TE']:
+            pos_mask = self.predictions_2025['position'] == position
+            pos_data = self.predictions_2025[pos_mask]
+            if len(pos_data) > 0:
+                tier_assignments = assign_tiers(pos_data, position)
+                self.predictions_2025.loc[pos_mask, 'tier'] = tier_assignments
         
-        # Add descriptive tier labels
+        # Add descriptive tier labels - top 3-4 per position get elite/tier 1 label
         tier_labels = {
             'QB': {1: 'Elite QB1', 2: 'QB1', 3: 'QB2', 4: 'Backup'},
             'RB': {1: 'Elite RB1', 2: 'RB1', 3: 'RB2', 4: 'RB3', 5: 'Handcuff'},
             'WR': {1: 'Elite WR1', 2: 'WR1', 3: 'WR2', 4: 'WR3', 5: 'Deep League'},
-            'TE': {1: 'Elite TE1', 2: 'TE1', 3: 'Streamer'}
+            'TE': {1: 'Elite TE1', 2: 'TE1', 3: 'Streamer', 4: 'Deep League'}
         }
         
         self.predictions_2025['tier_label'] = self.predictions_2025.apply(
