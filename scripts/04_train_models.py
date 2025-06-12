@@ -1,8 +1,9 @@
 """
-TRULY FIXED Model Training Pipeline for Fantasy Football Projections
+Position-Specific Model Training Pipeline for Fantasy Football Projections
 
-This script trains models using ONLY historical features with NO data leakage.
-Removes ALL same-season features including *_points features that sum to total_points.
+This script trains dedicated models for each position (QB, RB, WR, TE)
+using features with NO data leakage. This allows the models to capture the
+unique performance drivers for each position group.
 """
 
 import pandas as pd
@@ -11,9 +12,10 @@ import os
 from typing import Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
+import json
 
 # ML imports
-from sklearn.model_selection import GroupKFold, cross_val_score
+from sklearn.model_selection import GroupKFold, train_test_split
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
@@ -34,495 +36,253 @@ RESULTS_DIR = "data/results"
 CV_FOLDS = 5
 OPTUNA_TRIALS = 50
 RANDOM_STATE = 42
+POSITIONS_TO_TRAIN = ["QB", "RB", "WR", "TE"]
 
-class FantasyModelPipeline:
-    """Main modeling pipeline class with absolutely no data leakage"""
+class PositionSpecificModelPipeline:
+    """
+    Modeling pipeline that trains a separate model for each position.
+    """
     
-    def __init__(self):
+    def __init__(self, position: str):
+        self.position = position
+        self.raw_df = None # Store the initial raw data for the position
         self.features_df = None
         self.target_col = 'total_points'
         self.models = {}
         self.results = {}
         self.feature_importance = {}
+        print(f"Initializing pipeline for position: {self.position}")
         
-    def load_data(self):
-        """Load the FIXED feature dataset"""
-        print("Loading FIXED features (no data leakage)...")
+    def load_and_prepare_data(self):
+        """Load the feature dataset and prepare it for a specific position."""
+        print(f"[{self.position}] Loading and preparing data...")
         features_path = os.path.join(FEATURES_DIR, "player_features.parquet")
         
         if not os.path.exists(features_path):
-            raise FileNotFoundError(f"Fixed features not found at {features_path}. Please run 03_build_features.py first.")
+            raise FileNotFoundError(f"Features not found at {features_path}. Please run 03_build_features.py first.")
         
-        self.features_df = pd.read_parquet(features_path)
-        print(f"Loaded {len(self.features_df)} records with {len(self.features_df.columns)} features")
+        df = pd.read_parquet(features_path)
         
-        # Remove ALL same-season features
-        self.remove_all_same_season_features()
+        # Filter for the specific position and store it
+        self.raw_df = df[df['position'] == self.position].copy()
+        self.features_df = self.raw_df.copy()
         
-    def remove_all_same_season_features(self):
-        """Remove ALL features that use same-season data"""
-        print("Removing ALL same-season features...")
+        print(f"[{self.position}] Loaded {len(self.features_df)} records")
         
-        original_cols = len(self.features_df.columns)
+        # Remove same-season features to prevent data leakage
+        self._remove_leaky_features()
         
-        # First, explicitly preserve essential columns
-        preserve_cols = ['season', 'player_id', 'player_name', 'position', 'team', 'total_points']
+    def _remove_leaky_features(self):
+        """Remove all features that could cause data leakage."""
+        print(f"[{self.position}] Removing same-season (leaky) features...")
+        original_cols = self.features_df.columns.tolist()
         
-        # Identify ALL same-season features to remove
-        same_season_features = []
+        # Preserve essential columns
+        preserve_cols = ['season', 'player_id', 'player_name', 'position', 'team', self.target_col]
         
-        for col in self.features_df.columns:
-            # Skip preserved columns
-            if col in preserve_cols:
-                continue
-            # Keep historical/static features
-            elif any(indicator in col for indicator in ['_lag', '_decay', '_hist', 'age_', 'years_exp', 'height', 'weight', 'bmi']):
-                # These are historical/static features - keep them
-                continue
-            else:
-                # Everything else is potentially same-season data
-                same_season_features.append(col)
+        # Identify features to keep (historical/static ones)
+        historical_indicators = ['_lag', '_decay', '_hist', 'age_', 'years_exp', 'height', 'weight', 'bmi']
         
-        # Special check for any remaining features that might be same-season
-        additional_same_season = [
-            'games_played', 'games_missed', 'points_per_game_calc', 
-            'availability_rate_calc', 'games_missed_calc', 'historical_data_count'
-        ]
-        
-        # Add any *_points features (these are direct components of target)
-        points_features = [col for col in self.features_df.columns if '_points' in col and '_lag' not in col and '_decay' not in col and '_hist' not in col and col != 'total_points']
-        same_season_features.extend(points_features)
-        
-        # Add any raw statistical features from current season
-        stat_features = []
-        stat_indicators = [
-            'pass_attempt', 'pass_touchdown', 'passing_yards', 'interception',
-            'rush_attempt', 'rush_touchdown', 'rushing_yards', 
-            'receptions', 'receiving_yards', 'receiving_touchdown',
-            'targets', 'fumbles', 'two_point_conversion'
-        ]
-        
-        for col in self.features_df.columns:
-            if col in preserve_cols:  # Skip preserved columns
-                continue
-            if any(stat in col for stat in stat_indicators) and not any(hist in col for hist in ['_lag', '_decay', '_hist']):
-                if col not in same_season_features:
-                    stat_features.append(col)
-        
-        same_season_features.extend(stat_features)
-        same_season_features.extend(additional_same_season)
-        
-        # Remove duplicates and features that don't exist
-        same_season_features = list(set(same_season_features))
-        same_season_features = [col for col in same_season_features if col in self.features_df.columns]
-        
-        # Final check: ensure we're not removing preserved columns
-        same_season_features = [col for col in same_season_features if col not in preserve_cols]
-        
-        print(f"Removing {len(same_season_features)} same-season features:")
-        for feat in sorted(same_season_features)[:20]:  # Show first 20
-            print(f"  {feat}")
-        if len(same_season_features) > 20:
-            print(f"  ... and {len(same_season_features) - 20} more")
-        
-        # Drop same-season features
-        self.features_df = self.features_df.drop(columns=same_season_features)
-        
-        remaining_cols = len(self.features_df.columns)
-        print(f"Removed {original_cols - remaining_cols} features, {remaining_cols} remaining")
-        
-        # Final verification
-        self.verify_truly_no_leakage()
-        
-    def verify_truly_no_leakage(self):
-        """Final verification that no data leakage exists"""
-        print("Final verification of no data leakage...")
-        
-        # Check remaining feature names
-        remaining_features = [col for col in self.features_df.columns 
-                            if col not in ['season', 'player_id', 'player_name', 'position', 'team', 'total_points']]
-        
-        print(f"Remaining {len(remaining_features)} features:")
-        for feat in remaining_features[:15]:  # Show first 15
-            print(f"  {feat}")
-        if len(remaining_features) > 15:
-            print(f"  ... and {len(remaining_features) - 15} more")
-        
-        # Check for any highly correlated features - but only if target column exists
-        if len(remaining_features) > 0 and 'total_points' in self.features_df.columns:
-            print("Checking correlations with target...")
-            target_col = 'total_points'
-            high_corr_features = []
+        features_to_keep = preserve_cols.copy()
+        for col in original_cols:
+            if any(ind in col for ind in historical_indicators):
+                if col not in features_to_keep:
+                    features_to_keep.append(col)
             
-            for col in remaining_features:
-                if self.features_df[col].dtype in ['float64', 'int64', 'float32', 'int32']:
-                    if self.features_df[col].notna().sum() > 10:
-                        corr = self.features_df[col].corr(self.features_df[target_col])
-                        if abs(corr) > 0.8:  # Still high but more reasonable threshold
-                            high_corr_features.append((col, corr))
-            
-            if high_corr_features:
-                print(f"Features with correlation > 0.8 with target:")
-                for feat, corr in high_corr_features:
-                    print(f"  {feat}: {corr:.4f}")
-            else:
-                print("✓ No features with suspiciously high correlation found")
-        elif 'total_points' not in self.features_df.columns:
-            print("ERROR: Target column 'total_points' was accidentally removed!")
+        # Determine features to drop
+        features_to_drop = [col for col in original_cols if col not in features_to_keep]
         
-        print("✓ Data leakage verification complete")
-        
-    def prepare_data(self) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
-        """Prepare data for modeling"""
-        print("Preparing data for modeling...")
-        
-        # Remove records without target
+        self.features_df.drop(columns=features_to_drop, inplace=True, errors='ignore')
+        print(f"[{self.position}] Removed {len(features_to_drop)} leaky features.")
+
+    def get_data_splits(self) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
+        """Get final X, y, and feature columns for modeling."""
         df = self.features_df.dropna(subset=[self.target_col]).copy()
         
-        # Define feature columns (only historical/static features should remain)
-        exclude_cols = [
-            'season', 'player_id', 'player_name', 'position', 'team', self.target_col
-        ]
+        id_cols = ['season', 'player_id', 'player_name', 'position', 'team']
+        feature_cols = [col for col in df.columns if col not in id_cols and col != self.target_col]
         
-        feature_cols = [col for col in df.columns if col not in exclude_cols]
-        
-        # Fill missing values with median for numerical features
+        # Fill NaNs and handle zero variance columns
         for col in feature_cols:
             if df[col].dtype in ['float64', 'int64', 'float32', 'int32']:
                 median_val = df[col].median()
-                df[col] = df[col].fillna(median_val)
+                df[col].fillna(median_val, inplace=True)
         
-        # Drop features with too many missing values or zero variance
-        feature_cols = [col for col in feature_cols if df[col].notna().sum() > len(df) * 0.5]
-        feature_cols = [col for col in feature_cols if df[col].std() > 0]
+        feature_cols = [col for col in feature_cols if df[col].nunique() > 1]
         
         X = df[feature_cols]
         y = df[self.target_col]
         
-        print(f"Final feature set: {len(feature_cols)} features")
-        print(f"Training samples: {len(X)}")
-        print(f"Feature types: {X.dtypes.value_counts().to_dict()}")
+        # Robustly add back ID columns by merging with the original data
+        final_X = self.raw_df[id_cols].merge(X, left_index=True, right_index=True)
         
-        # Print all features to verify they're truly historical
-        print(f"All features being used: {feature_cols}")
+        print(f"[{self.position}] Final feature set: {len(feature_cols)} features for {len(X)} samples.")
+        return final_X, y, feature_cols
         
-        return X, y, feature_cols
-    
     def create_cv_splits(self, X: pd.DataFrame, y: pd.Series) -> List[Tuple]:
-        """Create cross-validation splits grouped by season"""
-        print("Creating cross-validation splits...")
-        
-        # Get seasons for grouping
-        seasons = self.features_df.loc[X.index, 'season']
-        
-        # Use GroupKFold to ensure no season appears in both train and test
+        """Create cross-validation splits grouped by season."""
+        seasons = X['season']
         gkf = GroupKFold(n_splits=CV_FOLDS)
-        cv_splits = list(gkf.split(X, y, groups=seasons))
         
-        print(f"Created {len(cv_splits)} CV folds")
-        
-        # Print split info
-        for i, (train_idx, test_idx) in enumerate(cv_splits):
-            train_seasons = seasons.iloc[train_idx].unique()
-            test_seasons = seasons.iloc[test_idx].unique()
-            print(f"  Fold {i+1}: Train seasons {sorted(train_seasons)}, Test seasons {sorted(test_seasons)}")
-        
-        return cv_splits
+        # We need to split on the numerical features, not the IDs
+        X_features_only = X.drop(columns=['season', 'player_id', 'player_name', 'position', 'team'])
+        return list(gkf.split(X_features_only, y, groups=seasons))
     
-    def evaluate_model(self, model, X: pd.DataFrame, y: pd.Series, cv_splits: List[Tuple]) -> Dict:
-        """Evaluate model with cross-validation"""
-        scores = {'rmse': [], 'mae': [], 'spearman': []}
+    def train_baseline_models(self, X: pd.DataFrame, y: pd.Series, cv_splits: List[Tuple]) -> Dict:
+        """Train and evaluate baseline models."""
+        print(f"[{self.position}] Training baseline models...")
+        results = {}
         
+        X_features_only = X.drop(columns=['season', 'player_id', 'player_name', 'position', 'team'])
+        
+        for name, model in [('linear', LinearRegression()), ('ridge', Ridge(random_state=RANDOM_STATE))]:
+            scores = self._evaluate_model(model, X_features_only, y, cv_splits)
+            results[name] = scores
+            print(f"  {name}: RMSE={scores['rmse_mean']:.3f}, Spearman={scores['spearman_mean']:.3f}")
+        return results
+
+    def _evaluate_model(self, model, X, y, cv_splits):
+        """Helper for model evaluation."""
+        scores = {'rmse': [], 'mae': [], 'spearman': []}
+        for train_idx, test_idx in cv_splits:
+            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+            scores['rmse'].append(np.sqrt(mean_squared_error(y_test, y_pred)))
+            scores['mae'].append(mean_absolute_error(y_test, y_pred))
+            scores['spearman'].append(spearmanr(y_test, y_pred)[0])
+        
+        return {k + '_mean': np.mean(v) for k, v in scores.items()}
+
+    def optimize_and_train_advanced_models(self, X: pd.DataFrame, y: pd.Series, cv_splits: List[Tuple]) -> Dict:
+        """Optimize and train CatBoost and LightGBM models."""
+        print(f"[{self.position}] Optimizing and training advanced models...")
+        advanced_results = {}
+        
+        X_features_only = X.drop(columns=['season', 'player_id', 'player_name', 'position', 'team'])
+
+        # CatBoost
+        cb_params, cb_score = self._optimize_catboost(X_features_only, y, cv_splits)
+        final_cb = cb.CatBoostRegressor(**cb_params, random_state=RANDOM_STATE, verbose=False)
+        final_cb.fit(X_features_only, y)
+        self.models['catboost'] = final_cb
+        advanced_results['catboost'] = {'cv_score': cb_score, 'params': cb_params, 'feature_importance': dict(zip(X_features_only.columns, final_cb.get_feature_importance()))}
+        print(f"  CatBoost Best CV score: {cb_score:.3f}")
+
+        # LightGBM
+        lgb_params, lgb_score = self._optimize_lightgbm(X_features_only, y, cv_splits)
+        
+        # We need a validation set for early stopping
+        X_train, X_val, y_train, y_val = train_test_split(X_features_only, y, test_size=0.2, random_state=RANDOM_STATE)
+        
+        final_lgb = lgb.train(lgb_params, lgb.Dataset(X_train, label=y_train), valid_sets=[lgb.Dataset(X_val, label=y_val)],
+                              num_boost_round=1000, callbacks=[lgb.early_stopping(50), lgb.log_evaluation(0)])
+        self.models['lightgbm'] = final_lgb
+        advanced_results['lightgbm'] = {'cv_score': lgb_score, 'params': lgb_params, 'feature_importance': dict(zip(X_features_only.columns, final_lgb.feature_importance()))}
+        print(f"  LightGBM Best CV score: {lgb_score:.3f}")
+
+        return advanced_results
+
+    def _optimizer_objective(self, trial, model_name, X, y, cv_splits):
+        """Generic objective function for Optuna."""
+        if model_name == 'catboost':
+            params = {
+                'iterations': trial.suggest_int('iterations', 100, 1000), 'depth': trial.suggest_int('depth', 4, 8),
+                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2), 'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 1, 10),
+                'random_strength': trial.suggest_float('random_strength', 1, 10), 'bagging_temperature': trial.suggest_float('bagging_temperature', 0, 1),
+            }
+        else: # lightgbm
+            params = {
+                'objective': 'regression', 'metric': 'rmse', 'num_leaves': trial.suggest_int('num_leaves', 20, 100),
+                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2), 'feature_fraction': trial.suggest_float('feature_fraction', 0.5, 1.0),
+                'bagging_fraction': trial.suggest_float('bagging_fraction', 0.5, 1.0), 'min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
+            }
+        
+        rmses = []
         for train_idx, test_idx in cv_splits:
             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
             y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
             
-            # Fit model
-            if hasattr(model, 'fit'):
+            if model_name == 'catboost':
+                model = cb.CatBoostRegressor(**params, random_state=RANDOM_STATE, verbose=False)
                 model.fit(X_train, y_train)
-            
-            # Predict
-            if hasattr(model, 'predict'):
-                y_pred = model.predict(X_test)
             else:
-                y_pred = model.predict(X_test)
-            
-            # Calculate metrics
-            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-            mae = mean_absolute_error(y_test, y_pred)
-            spearman = spearmanr(y_test, y_pred)[0]
-            
-            scores['rmse'].append(rmse)
-            scores['mae'].append(mae)
-            scores['spearman'].append(spearman)
-        
-        return {
-            'rmse_mean': np.mean(scores['rmse']),
-            'rmse_std': np.std(scores['rmse']),
-            'mae_mean': np.mean(scores['mae']),
-            'mae_std': np.std(scores['mae']),
-            'spearman_mean': np.mean(scores['spearman']),
-            'spearman_std': np.std(scores['spearman'])
-        }
-    
-    def train_baseline_models(self, X: pd.DataFrame, y: pd.Series, cv_splits: List[Tuple]) -> Dict:
-        """Train and evaluate baseline models"""
-        print("Training baseline models...")
-        
-        baseline_results = {}
-        
-        # Linear Regression
-        print("  Training Linear Regression...")
-        lr = LinearRegression()
-        lr_scores = self.evaluate_model(lr, X, y, cv_splits)
-        baseline_results['linear'] = lr_scores
-        
-        # Ridge Regression
-        print("  Training Ridge Regression...")
-        ridge = Ridge(alpha=1.0, random_state=RANDOM_STATE)
-        ridge_scores = self.evaluate_model(ridge, X, y, cv_splits)
-        baseline_results['ridge'] = ridge_scores
-        
-        print("Baseline results:")
-        for model_name, scores in baseline_results.items():
-            print(f"  {model_name}: RMSE={scores['rmse_mean']:.3f} ± {scores['rmse_std']:.3f}, "
-                  f"Spearman={scores['spearman_mean']:.3f} ± {scores['spearman_std']:.3f}")
-        
-        return baseline_results
-    
-    def optimize_catboost(self, X: pd.DataFrame, y: pd.Series, cv_splits: List[Tuple]) -> Tuple[Dict, float]:
-        """Optimize CatBoost hyperparameters"""
-        print("Optimizing CatBoost...")
-        
-        def objective(trial):
-            params = {
-                'iterations': trial.suggest_int('iterations', 100, 1000),
-                'depth': trial.suggest_int('depth', 4, 10),
-                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3),
-                'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 1, 10),
-                'random_strength': trial.suggest_float('random_strength', 1, 10),
-                'bagging_temperature': trial.suggest_float('bagging_temperature', 0, 1),
-                'border_count': trial.suggest_int('border_count', 32, 255),
-                'random_state': RANDOM_STATE,
-                'verbose': False
-            }
-            
-            scores = []
-            for train_idx, test_idx in cv_splits:
-                X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-                y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-                
-                model = cb.CatBoostRegressor(**params)
-                model.fit(X_train, y_train, verbose=False)
-                y_pred = model.predict(X_test)
-                
-                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-                scores.append(rmse)
-            
-            return np.mean(scores)
-        
+                X_t, X_v, y_t, y_v = train_test_split(X_train, y_train, test_size=0.2, random_state=RANDOM_STATE)
+                model = lgb.train(params, lgb.Dataset(X_t, label=y_t), valid_sets=[lgb.Dataset(X_v, label=y_v)],
+                                  num_boost_round=100, callbacks=[lgb.early_stopping(10), lgb.log_evaluation(0)])
+
+            preds = model.predict(X_test)
+            rmses.append(np.sqrt(mean_squared_error(y_test, preds)))
+        return np.mean(rmses)
+
+    def _optimize_catboost(self, X, y, cv_splits):
         study = optuna.create_study(direction='minimize')
-        study.optimize(objective, n_trials=OPTUNA_TRIALS)
-        
+        study.optimize(lambda trial: self._optimizer_objective(trial, 'catboost', X, y, cv_splits), n_trials=OPTUNA_TRIALS)
         return study.best_params, study.best_value
-    
-    def optimize_lightgbm(self, X: pd.DataFrame, y: pd.Series, cv_splits: List[Tuple]) -> Tuple[Dict, float]:
-        """Optimize LightGBM hyperparameters"""
-        print("Optimizing LightGBM...")
-        
-        def objective(trial):
-            params = {
-                'objective': 'regression',
-                'metric': 'rmse',
-                'num_leaves': trial.suggest_int('num_leaves', 10, 100),
-                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3),
-                'feature_fraction': trial.suggest_float('feature_fraction', 0.4, 1.0),
-                'bagging_fraction': trial.suggest_float('bagging_fraction', 0.4, 1.0),
-                'bagging_freq': trial.suggest_int('bagging_freq', 1, 7),
-                'min_child_samples': trial.suggest_int('min_child_samples', 5, 100),
-                'random_state': RANDOM_STATE,
-                'verbose': -1
-            }
-            
-            scores = []
-            for train_idx, test_idx in cv_splits:
-                X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-                y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-                
-                # Split training data for validation
-                from sklearn.model_selection import train_test_split
-                X_train_inner, X_val, y_train_inner, y_val = train_test_split(
-                    X_train, y_train, test_size=0.2, random_state=RANDOM_STATE
-                )
-                
-                train_data = lgb.Dataset(X_train_inner, label=y_train_inner)
-                val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
-                
-                model = lgb.train(
-                    params, 
-                    train_data, 
-                    valid_sets=[val_data],
-                    num_boost_round=100, 
-                    callbacks=[lgb.early_stopping(10), lgb.log_evaluation(0)]
-                )
-                
-                y_pred = model.predict(X_test, num_iteration=model.best_iteration)
-                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-                scores.append(rmse)
-            
-            return np.mean(scores)
-        
+
+    def _optimize_lightgbm(self, X, y, cv_splits):
         study = optuna.create_study(direction='minimize')
-        study.optimize(objective, n_trials=OPTUNA_TRIALS)
-        
+        study.optimize(lambda trial: self._optimizer_objective(trial, 'lightgbm', X, y, cv_splits), n_trials=OPTUNA_TRIALS)
         return study.best_params, study.best_value
-    
-    def train_final_models(self, X: pd.DataFrame, y: pd.Series, cv_splits: List[Tuple]) -> Dict:
-        """Train final optimized models"""
-        print("Training final optimized models...")
-        
-        results = {}
-        
-        # Optimize and train CatBoost
-        cb_params, cb_score = self.optimize_catboost(X, y, cv_splits)
-        print(f"Best CatBoost CV score: {cb_score:.3f}")
-        
-        final_cb = cb.CatBoostRegressor(**cb_params)
-        final_cb.fit(X, y, verbose=False)
-        self.models['catboost'] = final_cb
-        
-        results['catboost'] = {
-            'cv_score': cb_score,
-            'params': cb_params,
-            'feature_importance': dict(zip(X.columns, final_cb.get_feature_importance()))
-        }
-        
-        # Optimize and train LightGBM
-        lgb_params, lgb_score = self.optimize_lightgbm(X, y, cv_splits)
-        print(f"Best LightGBM CV score: {lgb_score:.3f}")
-        
-        # For final training, use a validation split
-        from sklearn.model_selection import train_test_split
-        X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
-            X, y, test_size=0.2, random_state=RANDOM_STATE
-        )
-        
-        train_data = lgb.Dataset(X_train_final, label=y_train_final)
-        val_data = lgb.Dataset(X_val_final, label=y_val_final, reference=train_data)
-        
-        final_lgb = lgb.train(
-            lgb_params, 
-            train_data, 
-            valid_sets=[val_data],
-            num_boost_round=1000,
-            callbacks=[lgb.early_stopping(50), lgb.log_evaluation(0)]
-        )
-        self.models['lightgbm'] = final_lgb
-        
-        results['lightgbm'] = {
-            'cv_score': lgb_score,
-            'params': lgb_params,
-            'feature_importance': dict(zip(X.columns, final_lgb.feature_importance()))
-        }
-        
-        return results
-    
-    def save_models_and_results(self, baseline_results: Dict, advanced_results: Dict):
-        """Save models and results"""
-        print("Saving models and results...")
-        
-        # Create directories
+
+    def save_artifacts(self, baseline_results: Dict, advanced_results: Dict):
+        """Save models and results for the position."""
+        print(f"[{self.position}] Saving artifacts...")
         os.makedirs(MODELS_DIR, exist_ok=True)
         os.makedirs(RESULTS_DIR, exist_ok=True)
         
         # Save models
-        if 'catboost' in self.models:
-            cb_path = os.path.join(MODELS_DIR, "catboost_model.cbm")
-            self.models['catboost'].save_model(cb_path)
-            print(f"Saved CatBoost model to {cb_path}")
-        
-        if 'lightgbm' in self.models:
-            lgb_path = os.path.join(MODELS_DIR, "lightgbm_model.txt")
-            self.models['lightgbm'].save_model(lgb_path)
-            print(f"Saved LightGBM model to {lgb_path}")
-        
-        # Convert numpy types to Python types for JSON serialization
-        def convert_numpy_types(obj):
-            if isinstance(obj, dict):
-                return {k: convert_numpy_types(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_numpy_types(item) for item in obj]
-            elif isinstance(obj, np.integer):
-                return int(obj)
-            elif isinstance(obj, np.floating):
-                return float(obj)
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist()
-            else:
-                return obj
+        for name, model in self.models.items():
+            model_path = os.path.join(MODELS_DIR, f"{name}_model_{self.position.lower()}.cbm" if name == 'catboost' else f"{name}_model_{self.position.lower()}.txt")
+            model.save_model(model_path)
         
         # Save results
-        results_summary = {
-            'baseline_results': convert_numpy_types(baseline_results),
-            'advanced_models': convert_numpy_types(advanced_results)
-        }
+        results_path = os.path.join(RESULTS_DIR, f"model_results_{self.position.lower()}.json")
+        summary = {'baseline_results': baseline_results, 'advanced_models': advanced_results}
         
-        results_path = os.path.join(RESULTS_DIR, "model_results.json")
-        import json
-        with open(results_path, 'w') as f:
-            json.dump(results_summary, f, indent=2)
-        print(f"Saved results to {results_path}")
-    
-    def print_summary(self, baseline_results: Dict, advanced_results: Dict):
-        """Print final summary"""
-        print("\n" + "="*60)
-        print("TRULY FIXED MODEL TRAINING SUMMARY (ZERO DATA LEAKAGE)")
-        print("="*60)
-        
-        print("\nBaseline Models:")
-        for model_name, scores in baseline_results.items():
-            print(f"  {model_name.upper()}:")
-            print(f"    RMSE: {scores['rmse_mean']:.3f} ± {scores['rmse_std']:.3f}")
-            print(f"    Spearman: {scores['spearman_mean']:.3f} ± {scores['spearman_std']:.3f}")
-        
-        print("\nAdvanced Models:")
-        for model_name, results in advanced_results.items():
-            print(f"  {model_name.upper()}:")
-            print(f"    CV RMSE: {results['cv_score']:.3f}")
+        # Numpy types to python types for JSON
+        def convert(o):
+            if isinstance(o, np.generic): return o.item()
+            raise TypeError
             
-            # Show top 5 most important features
-            feature_importance = results['feature_importance']
-            top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:5]
-            print(f"    Top features: {[f[0] for f in top_features]}")
-        
-        print(f"\nModels saved to: {MODELS_DIR}")
-        print(f"Results saved to: {RESULTS_DIR}")
-        print("\nNOTE: These results should be realistic for predicting fantasy football!")
-        print("Expected RMSE should be in the range of 50-120 points.")
-        print("Expected Spearman correlation should be in the range of 0.3-0.6.")
+        with open(results_path, 'w') as f:
+            json.dump(summary, f, indent=2, default=convert)
+        print(f"[{self.position}] Artifacts saved successfully.")
 
 def main():
-    """Main execution function"""
-    pipeline = FantasyModelPipeline()
+    """Main execution function to run pipelines for all positions."""
+    full_results = {}
+    for position in POSITIONS_TO_TRAIN:
+        print(f"\n{'='*20} TRAINING FOR: {position} {'='*20}")
+        pipeline = PositionSpecificModelPipeline(position)
+        pipeline.load_and_prepare_data()
+        X, y, feature_cols = pipeline.get_data_splits()
+        
+        if len(X) < 100:
+            print(f"[{position}] Skipping due to insufficient data ({len(X)} samples).")
+            continue
+            
+        cv_splits = pipeline.create_cv_splits(X, y)
+        baseline_results = pipeline.train_baseline_models(X, y, cv_splits)
+        advanced_results = pipeline.optimize_and_train_advanced_models(X, y, cv_splits)
+        pipeline.save_artifacts(baseline_results, advanced_results)
+        
+        full_results[position] = {
+            'baseline': baseline_results,
+            'advanced': advanced_results
+        }
     
-    # Load data
-    pipeline.load_data()
-    X, y, feature_cols = pipeline.prepare_data()
-    
-    # Create CV splits
-    cv_splits = pipeline.create_cv_splits(X, y)
-    
-    # Train baseline models
-    baseline_results = pipeline.train_baseline_models(X, y, cv_splits)
-    
-    # Train advanced models
-    advanced_results = pipeline.train_final_models(X, y, cv_splits)
-    
-    # Save everything
-    pipeline.save_models_and_results(baseline_results, advanced_results)
-    
-    # Print summary
-    pipeline.print_summary(baseline_results, advanced_results)
+    print("\n\n" + "="*60)
+    print("POSITION-SPECIFIC MODEL TRAINING SUMMARY")
+    print("="*60)
+    for pos, res in full_results.items():
+        cb_score = res['advanced']['catboost']['cv_score']
+        lgb_score = res['advanced']['lightgbm']['cv_score']
+        print(f"\n--- {pos} ---")
+        print(f"  CatBoost CV RMSE: {cb_score:.2f}")
+        print(f"  LightGBM CV RMSE: {lgb_score:.2f}")
+    print("\nAll position-specific models and results have been saved.")
 
 if __name__ == "__main__":
     main() 

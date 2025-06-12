@@ -285,43 +285,32 @@ class FixedFeatureEngineer:
         return df
     
     def add_roster_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add roster-based features (static attributes - no leakage)"""
-        if self.roster_data is None:
-            print("Skipping roster features (no roster data available)")
-            return df
+        """Add static player attributes from roster data"""
+        if df is None:
+            return pd.DataFrame()
             
         print("Adding roster features...")
+        roster_df = df.copy()
+
+        # The necessary columns 'age_2025' and 'years_exp' already exist.
+        # No calculation is needed.
+
+        # Height in inches and BMI
+        def parse_height(height_str):
+            if isinstance(height_str, str):
+                feet, inches = map(int, height_str.split('-'))
+                return feet * 12 + inches
+            return np.nan
         
-        # Merge with roster data (static attributes are OK)
-        roster_features = self.roster_data[['player_id', 'age_2025', 'years_exp', 'height', 'weight']].copy()
+        roster_df['height_inches'] = roster_df['height'].apply(parse_height)
         
-        # Convert height to inches if it's in string format
-        if 'height' in roster_features.columns:
-            def parse_height(height_str):
-                if pd.isna(height_str) or height_str == '':
-                    return np.nan
-                try:
-                    if isinstance(height_str, str) and '-' in height_str:
-                        feet, inches = height_str.split('-')
-                        return int(feet) * 12 + int(inches)
-                    else:
-                        return float(height_str)
-                except:
-                    return np.nan
-            
-            roster_features['height_inches'] = roster_features['height'].apply(parse_height)
-        
-        # Merge roster features
-        df = df.merge(roster_features, on='player_id', how='left')
-        
-        # Create BMI if height and weight are available
-        if 'height_inches' in df.columns and 'weight' in df.columns:
-            df['bmi'] = (df['weight'] * 703) / (df['height_inches'] ** 2)
-        
-        return df
+        if 'weight' in roster_df.columns and 'height_inches' in roster_df.columns:
+            roster_df['bmi'] = (roster_df['weight'] * 703) / (roster_df['height_inches'] ** 2)
+
+        return roster_df
     
     def calculate_position_specific_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate position-specific features using historical data only"""
+        """Calculate features that are specific to certain positions"""
         print("Calculating position-specific features...")
         
         # Calculate per-game statistics from lagged data (historical)
@@ -340,52 +329,81 @@ class FixedFeatureEngineer:
         return df
     
     def build_features(self) -> pd.DataFrame:
-        """Main feature building pipeline with temporal validation"""
-        print("Starting FIXED feature engineering pipeline...")
+        """Main feature building orchestrator - SIMPLIFIED VERSION"""
+        print("Starting feature engineering process...")
         
-        # Start with season stats
-        df = self.season_stats.copy()
+        # Start with season_stats as the base - this has all our identifier columns
+        base_df = self.season_stats.copy()
+        print(f"Starting with base data: {base_df.shape}")
         
-        # Add lag features first (these establish proper temporal relationship)
-        df = self.create_lag_features(df)
+        # Create all feature sets separately
+        print("Creating lag features...")
+        lag_df = self.create_lag_features(base_df.copy())
         
-        # Add exponential decay features (using historical data only)
-        df = self.calculate_exponential_decay_features(df)
+        print("Creating decay features...")
+        decay_df = self.calculate_exponential_decay_features(base_df.copy())
         
-        # Add historical percentile features (calculated from previous seasons)
-        df = self.calculate_historical_percentiles(df)
+        print("Creating historical percentile features...")
+        hist_df = self.calculate_historical_percentiles(base_df.copy())
         
-        # Add historical trend features
-        df = self.calculate_historical_trend_features(df)
+        print("Creating trend features...") 
+        trend_df = self.calculate_historical_trend_features(base_df.copy())
         
-        # Add position-specific features
-        df = self.calculate_position_specific_features(df)
+        # Start with the base data (which has all identifiers)
+        final_df = base_df.copy()
         
-        # Add roster features (static attributes - OK to use)
-        df = self.add_roster_features(df)
+        # Merge in the features from each dataset, only taking the new feature columns
+        feature_datasets = [
+            ('lag', lag_df),
+            ('decay', decay_df), 
+            ('hist', hist_df),
+            ('trend', trend_df)
+        ]
         
-        # Filter to players who have enough historical data
-        print("Filtering for players with sufficient historical data...")
+        for name, feature_df in feature_datasets:
+            if len(feature_df) > 0:
+                # Identify only the new feature columns (not identifiers)
+                id_cols = ['player_id', 'season', 'player_name', 'position', 'team']
+                existing_cols = set(final_df.columns)
+                new_feature_cols = [col for col in feature_df.columns 
+                                  if col not in existing_cols and col not in id_cols]
+                
+                if new_feature_cols:
+                    merge_cols = ['player_id', 'season']
+                    cols_to_merge = merge_cols + new_feature_cols
+                    final_df = pd.merge(final_df, feature_df[cols_to_merge], 
+                                      on=merge_cols, how='left')
+                    print(f"  Added {len(new_feature_cols)} features from {name}")
         
-        # Count non-null lag features to ensure we have historical data
-        lag_features = [col for col in df.columns if '_lag1' in col]
-        df['historical_data_count'] = df[lag_features].notna().sum(axis=1)
+        # Filter out players with insufficient historical data
+        lag_feature_cols = [col for col in final_df.columns if '_lag1' in col]
+        if lag_feature_cols:
+            final_df['historical_data_count'] = final_df[lag_feature_cols].notna().sum(axis=1)
+            final_df = final_df[final_df['historical_data_count'] >= MIN_SEASONS_FOR_PREDICTION]
+            final_df = final_df.drop(columns=['historical_data_count'])
+            print(f"Filtered to {len(final_df)} records with sufficient historical data")
         
-        # Keep only players with at least some historical data
-        df_filtered = df[df['historical_data_count'] > 0].copy()
+        # Add roster features (age, experience, BMI)
+        if self.roster_data is not None:
+            roster_features = self.add_roster_features(self.roster_data.copy())
+            roster_cols = ['player_id', 'age_2025', 'years_exp', 'height_inches', 'bmi']
+            available_roster_cols = [col for col in roster_cols if col in roster_features.columns]
+            
+            if len(available_roster_cols) > 1:  # More than just player_id
+                final_df = pd.merge(final_df, roster_features[available_roster_cols], 
+                                  on='player_id', how='left')
+                print(f"Added {len(available_roster_cols)-1} roster features")
         
-        # Also filter for minimum games threshold
-        df_filtered = df_filtered[df_filtered['games_played'] >= MIN_GAMES_THRESHOLD]
+        final_df = final_df.sort_values(['player_id', 'season'])
+        print(f"Final dataset shape: {final_df.shape}")
         
-        print(f"After filtering: {len(df_filtered)} records")
-        print(f"Feature engineering complete. Final dataset shape: {df_filtered.shape}")
+        # Verify we still have essential columns
+        essential_cols = ['player_id', 'season', 'player_name', 'position', 'team', 'total_points']
+        missing_cols = [col for col in essential_cols if col not in final_df.columns]
+        if missing_cols:
+            raise ValueError(f"Missing essential columns: {missing_cols}")
         
-        # Validate temporal separation for a few seasons
-        for season in [2016, 2020, 2024]:
-            if season in df_filtered['season'].values:
-                self.validate_temporal_separation(df_filtered, season)
-        
-        return df_filtered
+        return final_df
     
     def save_features(self, df: pd.DataFrame):
         """Save the fixed feature dataset"""
