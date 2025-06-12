@@ -1,0 +1,70 @@
+[
+  {
+    "timestamp": "2025-06-12T13:26:34.277868",
+    "player_name": "Saquon Barkley",
+    "update_type": "injury",
+    "status": "questionable",
+    "weeks_affected": 1,
+    "original_points": 550.0,
+    "adjusted_points": 540.2941176470588,
+    "point_change": -9.705882352941217
+  },
+  {
+    "timestamp": "2025-06-12T13:26:34.278237",
+    "player_name": "Travis Kelce",
+    "update_type": "injury",
+    "status": "probable",
+    "weeks_affected": 1,
+    "original_points": 414.0,
+    "adjusted_points": 411.56470588235294,
+    "point_change": -2.435294117647061
+  },
+  {
+    "timestamp": "2025-06-12T13:26:34.278567",
+    "player_name": "Tua Tagovailoa",
+    "update_type": "injury",
+    "status": "out",
+    "weeks_affected": 2,
+    "original_points": 407.0986984196376,
+    "adjusted_points": 359.20473389968026,
+    "point_change": -47.893964519957365
+  },
+  {
+    "timestamp": "2025-06-12T13:26:34.278877",
+    "player_name": "Jayden Daniels",
+    "update_type": "depth_chart",
+    "change_type": "promotion",
+    "original_points": 40.559540590072686,
+    "adjusted_points": 52.727402767094496,
+    "point_change": 12.16786217702181
+  },
+  {
+    "timestamp": "2025-06-12T13:26:34.279269",
+    "player_name": "Tony Pollard",
+    "update_type": "depth_chart",
+    "change_type": "trade",
+    "original_points": 343.2134439372834,
+    "adjusted_points": 411.85613272474006,
+    "point_change": 68.64268878745668
+  },
+  {
+    "timestamp": "2025-06-12T13:26:34.279578",
+    "player_name": "Josh Allen",
+    "update_type": "performance",
+    "adjustment_type": "hot_streak",
+    "multiplier": 1.08,
+    "original_points": 734.0658823529411,
+    "adjusted_points": 792.7911529411765,
+    "point_change": 58.72527058823539
+  },
+  {
+    "timestamp": "2025-06-12T13:26:34.279871",
+    "player_name": "Baker Mayfield",
+    "update_type": "performance",
+    "adjustment_type": "coaching_change",
+    "multiplier": 1.12,
+    "original_points": 518.9970555167409,
+    "adjusted_points": 581.2767021787499,
+    "point_change": 62.279646662008986
+  }
+]

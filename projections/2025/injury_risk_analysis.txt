@@ -1,0 +1,1 @@
+Injury Risk Modeling Report\nGenerated: 2025-06-12 13:25:25\n==================================================\n\nSummary Statistics:\nTotal players: 996\nAverage point adjustment: -23.4\nAverage expected games: 14.3\n\nRisk Distribution:\nHigh Risk: 419 players\nMedium Risk: 354 players\nLow Risk: 117 players\nVery High Risk: 106 players\n
