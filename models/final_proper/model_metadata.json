@@ -1,0 +1,14 @@
+{
+  "training_timestamp": "2025-06-12T13:53:57.158789",
+  "model_type": "final_proper_prediction",
+  "feature_engineering": "pure_prediction_no_current_season_data",
+  "positions": [
+    "QB",
+    "RB",
+    "WR",
+    "TE"
+  ],
+  "data_leakage_eliminated": true,
+  "true_prediction_scenario": true,
+  "realistic_correlations": true
+}

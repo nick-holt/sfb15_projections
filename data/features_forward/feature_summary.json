@@ -1,0 +1,46 @@
+{
+  "total_records": 6744,
+  "feature_count": 72,
+  "positions": {
+    "WR": 2400,
+    "RB": 1724,
+    "TE": 1306,
+    "QB": 855,
+    "K": 459
+  },
+  "seasons": [
+    2014,
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024
+  ],
+  "forward_looking_features": [
+    "prev_total_points",
+    "prev_games_played",
+    "prev_was_starter",
+    "career_avg_points",
+    "career_injury_rate",
+    "historical_starter_rate",
+    "team_prev_total_points",
+    "team_prev_qb_points",
+    "historical_injury_risk",
+    "estimated_starter_probability",
+    "years_experience",
+    "points_trend"
+  ],
+  "no_data_leakage": true,
+  "data_leakage_prevention": [
+    "Team stats exclude current player to avoid circular dependency",
+    "All features use only previous season(s) data",
+    "No current season performance used as input feature",
+    "Proper time-aware feature engineering"
+  ],
+  "generated_timestamp": "2025-06-12T13:49:09.625496"
+}

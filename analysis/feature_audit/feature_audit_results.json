@@ -1,0 +1,157 @@
+{
+  "stat_categories": {
+    "passing": [
+      "passing_yards_points",
+      "passing_td_points",
+      "pass_attempt",
+      "passing_yards",
+      "pass_touchdown"
+    ],
+    "rushing": [
+      "rushing_yards_points",
+      "rushing_td_points",
+      "rushing_first_down_points",
+      "rushing_attempt_points",
+      "rush_attempt",
+      "rushing_yards",
+      "rush_touchdown"
+    ],
+    "receiving": [
+      "receiving_yards_points",
+      "receiving_td_points",
+      "receiving_first_down_points",
+      "receiving_yards",
+      "receiving_touchdown"
+    ],
+    "scoring": [
+      "passing_yards_points",
+      "passing_td_points",
+      "rushing_yards_points",
+      "rushing_td_points",
+      "rushing_first_down_points",
+      "rushing_attempt_points",
+      "receptions_points",
+      "receiving_yards_points",
+      "receiving_td_points",
+      "receiving_first_down_points",
+      "te_reception_bonus_points",
+      "fg_made_points",
+      "pat_made_points",
+      "pass_touchdown",
+      "rush_touchdown",
+      "receiving_touchdown",
+      "total_points"
+    ],
+    "efficiency": [],
+    "situational": []
+  },
+  "gap_analysis": {
+    "QB": {
+      "total_current": 42,
+      "missing_critical": [
+        "rushing_attempts_per_game",
+        "designed_runs_percentage",
+        "goal_line_rush_rate",
+        "red_zone_rush_attempts",
+        "qb_rating_under_pressure",
+        "mobility_score"
+      ],
+      "gap_count": 6
+    },
+    "RB": {
+      "total_current": 42,
+      "missing_critical": [
+        "snap_count_percentage",
+        "target_share",
+        "red_zone_carries_per_game",
+        "goal_line_touches",
+        "third_down_usage_rate",
+        "two_minute_drill_usage"
+      ],
+      "gap_count": 6
+    },
+    "WR": {
+      "total_current": 42,
+      "missing_critical": [
+        "target_share",
+        "air_yards_share",
+        "red_zone_targets_per_game",
+        "snap_count_percentage",
+        "slot_vs_outside_rate",
+        "deep_target_rate"
+      ],
+      "gap_count": 6
+    },
+    "TE": {
+      "total_current": 42,
+      "missing_critical": [
+        "route_participation_rate",
+        "inline_vs_slot_usage",
+        "red_zone_targets_per_game",
+        "snap_count_percentage",
+        "blocking_snap_percentage"
+      ],
+      "gap_count": 5
+    }
+  },
+  "recommendations": {
+    "immediate_wins": [
+      "Career rushing yards per game (QB)",
+      "Historical red zone touches (RB)",
+      "Target share percentage calculation (WR/TE)",
+      "Games with 100+ yards trends",
+      "Season-over-season improvement rates"
+    ],
+    "medium_term": [
+      "Snap count percentages (need snap data)",
+      "Route participation rates (need route data)",
+      "Red zone opportunity shares (need situational data)",
+      "Team pace and efficiency metrics",
+      "Air yards and target quality metrics"
+    ],
+    "data_needed": [
+      "Weekly snap count data (FantasyData API)",
+      "Route running data (Pro Football Focus)",
+      "Red zone situation breakdowns",
+      "Team pace and efficiency stats",
+      "Target separation and air yards data"
+    ]
+  },
+  "action_plan": [
+    {
+      "priority": "P0 - Critical",
+      "task": "Create enhanced feature engineering pipeline",
+      "subtasks": [
+        "Build QB rushing features from existing data",
+        "Calculate target shares for WR/TE from reception data",
+        "Create red zone usage metrics",
+        "Add career trend and efficiency features"
+      ],
+      "timeline": "1-2 days",
+      "impact": "High - Should improve elite separation immediately"
+    },
+    {
+      "priority": "P1 - High",
+      "task": "Enhance team context features",
+      "subtasks": [
+        "Add team offensive pace metrics",
+        "Calculate red zone efficiency by team",
+        "Create scoring environment features",
+        "Add strength of schedule adjustments"
+      ],
+      "timeline": "2-3 days",
+      "impact": "Medium-High - Better situational modeling"
+    },
+    {
+      "priority": "P2 - Medium",
+      "task": "External data integration",
+      "subtasks": [
+        "Integrate snap count data if available",
+        "Add route running metrics if accessible",
+        "Enhance with target quality data"
+      ],
+      "timeline": "1 week",
+      "impact": "Medium - Depends on data availability"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "training_timestamp": "2025-06-12T13:50:20.515858",
+  "model_type": "proper_forward_looking",
+  "feature_engineering": "forward_looking_no_data_leakage",
+  "positions": [
+    "QB",
+    "RB",
+    "WR",
+    "TE"
+  ],
+  "data_leakage_prevention": true,
+  "expected_correlation_range": "0.6-0.8"
+}
