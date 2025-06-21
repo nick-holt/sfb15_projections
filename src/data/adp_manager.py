@@ -393,7 +393,28 @@ class ADPManager:
                     continue
                 
                 if not data.empty:
-                    source_data[source] = data
+                    # Ensure we have a valid name column
+                    if 'name' not in data.columns or data['name'].isna().all():
+                        self.logger.warning(f"No valid names found in {source} data")
+                        continue
+                    
+                    # Standardize the ADP column name
+                    if 'consensus_adp' in data.columns:
+                        data['standard_adp'] = data['consensus_adp']
+                    elif 'adp' in data.columns:
+                        data['standard_adp'] = data['adp']
+                    else:
+                        self.logger.warning(f"No ADP column found in {source} data")
+                        continue
+                    
+                    # Filter out rows with missing names or ADP values
+                    data_clean = data.dropna(subset=['name', 'standard_adp'])
+                    if data_clean.empty:
+                        self.logger.warning(f"No valid data after cleaning {source}")
+                        continue
+                    
+                    source_data[source] = data_clean
+                    self.logger.info(f"Loaded {len(data_clean)} clean records from {source}")
             
             if not source_data:
                 self.logger.error("No ADP data available from any source")
@@ -402,10 +423,15 @@ class ADPManager:
             # Calculate weighted ADP
             blended_data = []
             
-            # Get all unique player names
+            # Get all unique player names from ALL sources (including those with NaN in some sources)
             all_players = set()
-            for data in source_data.values():
-                all_players.update(data['name'].tolist())
+            for source, data in source_data.items():
+                # Get all names, even if some are NaN in other columns
+                source_names = data['name'].dropna().tolist()
+                all_players.update(source_names)
+                self.logger.debug(f"Added {len(source_names)} valid names from {source}")
+            
+            self.logger.info(f"Found {len(all_players)} unique players across all sources")
             
             for player_name in all_players:
                 weighted_adp = 0
@@ -417,7 +443,7 @@ class ADPManager:
                     
                     if len(player_data) > 0:
                         weight = weights.get(source, 0)
-                        adp_value = player_data.iloc[0]['consensus_adp']
+                        adp_value = player_data.iloc[0]['standard_adp']
                         
                         weighted_adp += adp_value * weight
                         total_weight += weight

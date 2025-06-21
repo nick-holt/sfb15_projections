@@ -138,8 +138,8 @@ def main():
     tab1, tab2 = st.tabs(["🏈 Player Analysis", "📈 ADP Analysis"])
     
     with tab1:
-        # Main dashboard view
-        render_main_view(projections, value_calc, tier_manager, sidebar_config)
+        # Main dashboard view - pass ADP data for enhanced player analysis
+        render_main_view(projections, value_calc, tier_manager, adp_data, sidebar_config)
     
     with tab2:
         # ADP analysis view

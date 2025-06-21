@@ -32,14 +32,27 @@ class ADPAnalyzer:
     def calculate_adp_value_metrics(self, projections_df: pd.DataFrame, adp_df: pd.DataFrame) -> pd.DataFrame:
         """Calculate comprehensive ADP value metrics"""
         try:
-            # Merge projections with ADP data
+            # John Carmack approach: normalize only valid names during join
+            from src.utils.name_normalizer import name_normalizer
+            
+            # Filter ADP data to only valid names and normalize
+            adp_valid = adp_df[adp_df['name'].notna()].copy()
+            adp_valid['normalized_name'] = adp_valid['name'].apply(name_normalizer.normalize_name)
+            
+            # Normalize projection names
+            proj_norm = projections_df.copy()
+            proj_norm['normalized_name'] = proj_norm['player_name'].apply(name_normalizer.normalize_name)
+            
+            # Merge on normalized names
             merged_df = pd.merge(
-                projections_df, 
-                adp_df, 
-                left_on='player_name', 
-                right_on='name', 
+                proj_norm, 
+                adp_valid, 
+                on='normalized_name', 
                 how='inner'
             )
+            
+            # Clean up
+            merged_df = merged_df.drop(columns=['normalized_name'])
             
             if merged_df.empty:
                 self.logger.warning("No matching players found for ADP analysis")
@@ -323,6 +336,7 @@ class ADPAnalyzer:
         """Get recommended draft rounds for a position based on value"""
         try:
             # Find rounds with best value opportunities
+            pos_data = pos_data.copy()  # Fix SettingWithCopyWarning
             pos_data['draft_round'] = ((pos_data['consensus_adp'] - 1) // 12) + 1
             
             round_values = pos_data.groupby('draft_round')['adp_value'].agg(['mean', 'count']).reset_index()

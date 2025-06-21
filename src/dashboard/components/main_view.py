@@ -17,64 +17,110 @@ except ImportError:
 
 from ..utils.styling import format_player_card_html, get_tier_badge_html, get_position_badge_html
 
-def render_main_view(projections: pd.DataFrame, value_calc, tier_manager, config: Dict[str, Any]):
+def render_main_view(projections: pd.DataFrame, value_calc, tier_manager, adp_data: pd.DataFrame, config: Dict[str, Any]):
     """
-    Render the main dashboard view based on configuration
-    
-    Args:
-        projections: DataFrame with player projections and analytics
-        value_calc: ValueCalculator instance
-        tier_manager: TierManager instance
-        config: Configuration dictionary from sidebar
+    Main dashboard view with enhanced projections and ADP integration
     """
+    st.subheader("🏈 Enhanced Player Analysis")
     
-    # Apply filters to projections
-    filtered_projections = apply_filters(projections, config)
+    # Merge projections with ADP data if available
+    enhanced_projections = projections.copy()
+    if adp_data is not None and not adp_data.empty:
+        # John Carmack approach: minimal fix - normalize names during merge only
+        from src.utils.name_normalizer import name_normalizer
+        
+        # Prepare ADP data for joining with name normalization
+        adp_join_df = adp_data[adp_data['name'].notna()].copy()
+        adp_join_df['normalized_name'] = adp_join_df['name'].apply(name_normalizer.normalize_name)
+        
+        # Prepare projections for joining
+        proj_join_df = projections.copy()
+        proj_join_df['normalized_name'] = proj_join_df['player_name'].apply(name_normalizer.normalize_name)
+        
+        # Merge on normalized names
+        enhanced_projections = pd.merge(
+            proj_join_df,
+            adp_join_df[['normalized_name', 'consensus_adp']],
+            on='normalized_name',
+            how='left'
+        )
+        
+        # Clean up
+        enhanced_projections = enhanced_projections.drop(columns=['normalized_name'])
+        
+        # Also get raw SFB15 ADP data directly from the scraper
+        try:
+            from src.data.adp_manager import ADPManager
+            adp_manager = ADPManager()
+            raw_sfb15_data = adp_manager.fetch_sfb15_adp()
+            
+            if not raw_sfb15_data.empty:
+                # Normalize SFB15 names for joining
+                raw_sfb15_for_join = raw_sfb15_data.copy()
+                raw_sfb15_for_join['normalized_name'] = raw_sfb15_for_join['name'].apply(name_normalizer.normalize_name)
+                
+                # Create temporary normalized name column for enhanced_projections
+                enhanced_projections['normalized_name'] = enhanced_projections['player_name'].apply(name_normalizer.normalize_name)
+                
+                # Merge raw SFB15 data with different column names using normalized names
+                enhanced_projections = pd.merge(
+                    enhanced_projections,
+                    raw_sfb15_for_join[['normalized_name', 'consensus_adp', 'rank']].rename(columns={
+                        'consensus_adp': 'sfb15_raw_adp',  # Different name to avoid conflict
+                        'rank': 'sfb15_rank'
+                    }),
+                    on='normalized_name',
+                    how='left'
+                )
+                
+                # Drop the temporary normalized name column
+                enhanced_projections = enhanced_projections.drop(columns=['normalized_name'])
+            
+        except Exception as e:
+            st.warning(f"Could not load raw SFB15 ADP data: {str(e)}")
+        
+        # Calculate ADP values (projection rank - ADP rank = value, positive is good)
+        if 'consensus_adp' in enhanced_projections.columns:
+            # Use blended ADP for value calculation
+            enhanced_projections['adp_value'] = enhanced_projections['overall_rank'] - enhanced_projections['consensus_adp']
+        
+        if 'sfb15_rank' in enhanced_projections.columns:
+            # Calculate raw SFB15 ADP value
+            enhanced_projections['sfb15_adp_value'] = enhanced_projections['overall_rank'] - enhanced_projections['sfb15_rank']
     
-    # Render based on selected view mode
-    if config['view_mode'] == "Player Rankings":
-        render_player_rankings(filtered_projections, config)
-    elif config['view_mode'] == "Tier Analysis":
-        render_tier_analysis(filtered_projections, tier_manager, config)
-    elif config['view_mode'] == "Value Explorer":
-        render_value_explorer(filtered_projections, value_calc, config)
-    elif config['view_mode'] == "Draft Assistant":
-        render_draft_assistant(filtered_projections, value_calc, tier_manager, config)
+    # Apply filters from sidebar
+    filtered_projections = apply_filters(enhanced_projections, config)
+    
+    if filtered_projections.empty:
+        st.warning("No players match the current filters. Please adjust your criteria.")
+        return
+    
+    # Main content
+    render_player_rankings(filtered_projections, config)
 
 def apply_filters(projections: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
     """Apply sidebar filters to projections DataFrame"""
     df = projections.copy()
     
-    # Debug: print filter info
-    print(f"Starting with {len(df)} players")
-    print(f"Positions filter: {config['positions']}")
-    print(f"Max tier: {config['max_tier']}")
-    print(f"Min projected points: {config['min_projected_points']}")
-    
     # Position filter
     if config['positions']:
         df = df[df['position'].isin(config['positions'])]
-        print(f"After position filter: {len(df)} players")
     
     # Tier filter (only apply if tier column exists)
     if 'tier' in df.columns:
         df = df[df['tier'] <= config['max_tier']]
-        print(f"After tier filter: {len(df)} players")
     
     # Search filter
     if config['search_term']:
         search_mask = df['player_name'].str.contains(config['search_term'], case=False, na=False)
         df = df[search_mask]
-        print(f"After search filter: {len(df)} players")
     
     # Projected points filter
     df = df[df['projected_points'] >= config['min_projected_points']]
-    print(f"After points filter: {len(df)} players")
     
     # Age filter (if age column exists)
     if 'age' in df.columns:
         df = df[df['age'] <= config['max_age']]
-        print(f"After age filter: {len(df)} players")
     
     # Confidence filter (if confidence column exists and has valid data)
     if 'confidence' in df.columns:
@@ -89,8 +135,6 @@ def apply_filters(projections: pd.DataFrame, config: Dict[str, Any]) -> pd.DataF
             
             if isinstance(first_valid_confidence, (int, float)):
                 # Numeric confidence scores - convert to categorical
-                print("Converting numeric confidence to categories...")
-                
                 def categorize_confidence(score):
                     if pd.isna(score):
                         return 'Medium'
@@ -103,18 +147,11 @@ def apply_filters(projections: pd.DataFrame, config: Dict[str, Any]) -> pd.DataF
                 
                 df['confidence_category'] = df['confidence'].apply(categorize_confidence)
                 df = df[df['confidence_category'].isin(confidence_levels)]
-                print(f"Confidence distribution: {df['confidence_category'].value_counts().to_dict()}")
                 
             else:
                 # Categorical confidence - use as is
                 df = df[df['confidence'].isin(confidence_levels)]
-                print(f"Confidence distribution: {df['confidence'].value_counts().to_dict()}")
-        elif not valid_confidence:
-            print("Warning: Confidence column contains only NaN values, skipping confidence filter")
-        
-        print(f"After confidence filter: {len(df)} players")
     
-    print(f"Final filtered result: {len(df)} players")
     return df
 
 def render_player_rankings(projections: pd.DataFrame, config: Dict[str, Any]):
@@ -174,13 +211,19 @@ def render_player_cards(players: pd.DataFrame, config: Dict[str, Any]):
 
 def render_player_table(projections: pd.DataFrame, config: Dict[str, Any]):
     """
-    Render player data as a table
+    Render player data as a table with enhanced ADP integration
     """
-    # Select columns for display
+    # Select columns for display - include ADP data if available
     display_columns = [
         'player_name', 'position', 'team', 'projected_points', 
         'tier_label', 'draft_value', 'overall_rank'
     ]
+    
+    # Add ADP columns if they exist
+    if 'sfb15_raw_adp' in projections.columns:
+        display_columns.extend(['sfb15_raw_adp', 'sfb15_adp_value'])
+    if 'consensus_adp' in projections.columns:
+        display_columns.extend(['consensus_adp', 'adp_value'])
     
     # Check which columns exist
     available_columns = [col for col in display_columns if col in projections.columns]
@@ -188,16 +231,41 @@ def render_player_table(projections: pd.DataFrame, config: Dict[str, Any]):
     if available_columns:
         display_df = projections[available_columns].copy()
         
-        # Round numeric columns
-        numeric_columns = display_df.select_dtypes(include=['float64', 'int64']).columns
-        for col in numeric_columns:
-            if col != 'overall_rank':  # Don't round ranks
-                display_df[col] = display_df[col].round(1)
+        # Rename columns for better display
+        column_renames = {
+            'player_name': 'Player',
+            'position': 'Pos',
+            'team': 'Team',
+            'projected_points': 'Proj Pts',
+            'tier_label': 'Tier',
+            'draft_value': 'Value',
+            'overall_rank': 'Proj Rank',
+            'sfb15_raw_adp': 'SFB15 ADP',
+            'sfb15_adp_value': 'SFB15 Value',
+            'consensus_adp': 'Blended ADP',
+            'adp_value': 'Blend Value'
+        }
         
-        # Remove use_container_width for compatibility with Streamlit 1.12.0
+        # Only rename columns that exist
+        actual_renames = {k: v for k, v in column_renames.items() if k in display_df.columns}
+        display_df = display_df.rename(columns=actual_renames)
+        
+        # Format numeric columns
+        numeric_columns = ['Proj Pts', 'Proj Rank', 'SFB15 ADP', 'Blended ADP']
+        for col in numeric_columns:
+            if col in display_df.columns:
+                display_df[col] = pd.to_numeric(display_df[col], errors='coerce').round(1)
+        
+        # Format value columns (can be negative)
+        value_columns = ['Value', 'SFB15 Value', 'Blend Value']
+        for col in value_columns:
+            if col in display_df.columns:
+                display_df[col] = pd.to_numeric(display_df[col], errors='coerce').round(1)
+        
+        # Display the table
         st.dataframe(display_df)
     else:
-        st.error("No valid columns found for display")
+        st.error("No valid columns found for display.")
 
 def render_all_players_table(projections: pd.DataFrame, config: Dict[str, Any]):
     """
