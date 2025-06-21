@@ -16,12 +16,16 @@ except ImportError:
     PLOTLY_AVAILABLE = False
 
 from ..utils.styling import format_player_card_html, get_tier_badge_html, get_position_badge_html
+from ...analytics.vorp_calculator import VORPCalculator
 
 def render_main_view(projections: pd.DataFrame, value_calc, tier_manager, adp_data: pd.DataFrame, config: Dict[str, Any]):
     """
     Main dashboard view with enhanced projections and ADP integration
     """
     st.subheader("🏈 Enhanced Player Analysis")
+    
+    # Initialize VORP calculator
+    vorp_calc = VORPCalculator(num_teams=config.get('num_teams', 12))
     
     # Merge projections with ADP data if available
     enhanced_projections = projections.copy()
@@ -88,6 +92,13 @@ def render_main_view(projections: pd.DataFrame, value_calc, tier_manager, adp_da
             # Calculate raw SFB15 ADP value
             enhanced_projections['sfb15_adp_value'] = enhanced_projections['overall_rank'] - enhanced_projections['sfb15_rank']
     
+    # Calculate VORP scores
+    enhanced_projections = vorp_calc.calculate_vorp_scores(enhanced_projections)
+    
+    # Calculate ADP-VORP value if ADP data is available
+    if 'consensus_adp' in enhanced_projections.columns:
+        enhanced_projections = vorp_calc.calculate_adp_vorp_value(enhanced_projections, 'consensus_adp')
+    
     # Apply filters from sidebar
     filtered_projections = apply_filters(enhanced_projections, config)
     
@@ -95,8 +106,22 @@ def render_main_view(projections: pd.DataFrame, value_calc, tier_manager, adp_da
         st.warning("No players match the current filters. Please adjust your criteria.")
         return
     
-    # Main content
-    render_player_rankings(filtered_projections, config)
+    # Main content - route to appropriate view based on config
+    view_mode = config.get('view_mode', 'Player Rankings')
+    
+    if view_mode == "Player Rankings":
+        render_player_rankings(filtered_projections, config, vorp_calc)
+    elif view_mode == "Tier Analysis":
+        render_tier_analysis(filtered_projections, tier_manager, config)
+    elif view_mode == "Value Explorer":
+        render_value_explorer(filtered_projections, value_calc, config)
+    elif view_mode == "VORP Explorer":
+        render_vorp_explorer(filtered_projections, vorp_calc, config)
+    elif view_mode == "Draft Assistant":
+        render_draft_assistant(filtered_projections, value_calc, tier_manager, config)
+    else:
+        # Fallback to player rankings
+        render_player_rankings(filtered_projections, config, vorp_calc)
 
 def apply_filters(projections: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
     """Apply sidebar filters to projections DataFrame"""
@@ -154,7 +179,7 @@ def apply_filters(projections: pd.DataFrame, config: Dict[str, Any]) -> pd.DataF
     
     return df
 
-def render_player_rankings(projections: pd.DataFrame, config: Dict[str, Any]):
+def render_player_rankings(projections: pd.DataFrame, config: Dict[str, Any], vorp_calc=None):
     """
     Render player rankings with position-specific views
     """
@@ -211,19 +236,27 @@ def render_player_cards(players: pd.DataFrame, config: Dict[str, Any]):
 
 def render_player_table(projections: pd.DataFrame, config: Dict[str, Any]):
     """
-    Render player data as a table with enhanced ADP integration
+    Render player data as a table with enhanced ADP integration and VORP
     """
-    # Select columns for display - include ADP data if available
+    # Select columns for display - include ADP and VORP data if available
     display_columns = [
         'player_name', 'position', 'team', 'projected_points', 
         'tier_label', 'draft_value', 'overall_rank'
     ]
+    
+    # Add VORP columns if they exist
+    if 'vorp_score' in projections.columns:
+        display_columns.extend(['vorp_score', 'vorp_tier', 'vorp_overall_rank'])
     
     # Add ADP columns if they exist
     if 'sfb15_raw_adp' in projections.columns:
         display_columns.extend(['sfb15_raw_adp', 'sfb15_adp_value'])
     if 'consensus_adp' in projections.columns:
         display_columns.extend(['consensus_adp', 'adp_value'])
+    
+    # Add ADP-VORP value if available
+    if 'vorp_adp_value' in projections.columns:
+        display_columns.extend(['vorp_adp_value', 'vorp_adp_tier'])
     
     # Check which columns exist
     available_columns = [col for col in display_columns if col in projections.columns]
@@ -240,10 +273,15 @@ def render_player_table(projections: pd.DataFrame, config: Dict[str, Any]):
             'tier_label': 'Tier',
             'draft_value': 'Value',
             'overall_rank': 'Proj Rank',
+            'vorp_score': 'VORP',
+            'vorp_tier': 'VORP Tier',
+            'vorp_overall_rank': 'VORP Rank',
             'sfb15_raw_adp': 'SFB15 ADP',
             'sfb15_adp_value': 'SFB15 Value',
             'consensus_adp': 'Blended ADP',
-            'adp_value': 'Blend Value'
+            'adp_value': 'Blend Value',
+            'vorp_adp_value': 'VORP-ADP Value',
+            'vorp_adp_tier': 'VORP-ADP Tier'
         }
         
         # Only rename columns that exist
@@ -251,13 +289,13 @@ def render_player_table(projections: pd.DataFrame, config: Dict[str, Any]):
         display_df = display_df.rename(columns=actual_renames)
         
         # Format numeric columns
-        numeric_columns = ['Proj Pts', 'Proj Rank', 'SFB15 ADP', 'Blended ADP']
+        numeric_columns = ['Proj Pts', 'Proj Rank', 'VORP', 'VORP Rank', 'SFB15 ADP', 'Blended ADP']
         for col in numeric_columns:
             if col in display_df.columns:
                 display_df[col] = pd.to_numeric(display_df[col], errors='coerce').round(1)
         
         # Format value columns (can be negative)
-        value_columns = ['Value', 'SFB15 Value', 'Blend Value']
+        value_columns = ['Value', 'SFB15 Value', 'Blend Value', 'VORP-ADP Value']
         for col in value_columns:
             if col in display_df.columns:
                 display_df[col] = pd.to_numeric(display_df[col], errors='coerce').round(1)
@@ -416,6 +454,137 @@ def render_value_explorer(projections: pd.DataFrame, value_calc, config: Dict[st
             if not player_data.empty:
                 p = player_data.iloc[0]
                 st.write(f"• {player} ({p['position']}) - {p['projected_points']:.1f} pts")
+
+def render_vorp_explorer(projections: pd.DataFrame, vorp_calc, config: Dict[str, Any]):
+    """Render the VORP (Value Over Replacement Player) explorer view"""
+    st.subheader("🏆 VORP Explorer")
+    
+    # VORP-based metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if 'vorp_score' in projections.columns:
+            elite_vorp = projections[projections['vorp_tier'] == 'Elite VORP']
+            st.metric("Elite VORP", len(elite_vorp))
+    
+    with col2:
+        if 'vorp_score' in projections.columns:
+            avg_vorp = projections['vorp_score'].mean()
+            st.metric("Avg VORP Score", f"{avg_vorp:.1f}")
+    
+    with col3:
+        if 'vorp_score' in projections.columns:
+            positive_vorp = projections[projections['vorp_score'] > 0]
+            st.metric("Positive VORP", len(positive_vorp))
+    
+    with col4:
+        if 'replacement_points' in projections.columns:
+            # Show most scarce position based on VORP insights
+            vorp_insights = vorp_calc.get_vorp_insights(projections)
+            most_scarce = vorp_insights['overall'].get('most_scarce_position', 'RB')
+            st.metric("Most Scarce", most_scarce)
+    
+    # VORP vs Projected Points scatter plot
+    if 'vorp_score' in projections.columns and 'projected_points' in projections.columns:
+        st.write("**VORP vs Projection Analysis**")
+        
+        if PLOTLY_AVAILABLE:
+            fig = px.scatter(
+                projections,
+                x='projected_points',
+                y='vorp_score',
+                color='position',
+                size='vorp_scarcity_adjusted',
+                hover_data=['player_name', 'vorp_tier', 'replacement_points'],
+                title="VORP Score vs Projected Points",
+                labels={
+                    'projected_points': 'Projected Fantasy Points',
+                    'vorp_score': 'Value Over Replacement Player (VORP)'
+                }
+            )
+            st.plotly_chart(fig)
+        else:
+            st.write("**Top VORP Players:**")
+            analysis_df = projections[['player_name', 'position', 'projected_points', 'vorp_score', 'vorp_tier']].head(20)
+            st.dataframe(analysis_df)
+    
+    # VORP insights by position
+    if 'vorp_score' in projections.columns:
+        st.write("**VORP Insights by Position**")
+        vorp_insights = vorp_calc.get_vorp_insights(projections)
+        
+        cols = st.columns(4)
+        positions = ['QB', 'RB', 'WR', 'TE']
+        
+        for i, position in enumerate(positions):
+            with cols[i]:
+                pos_insights = vorp_insights.get(position, {})
+                if pos_insights:
+                    st.write(f"**{position}**")
+                    st.write(f"Total: {pos_insights.get('total_players', 0)}")
+                    st.write(f"Positive VORP: {pos_insights.get('positive_vorp_players', 0)}")
+                    st.write(f"Elite VORP: {pos_insights.get('elite_vorp_players', 0)}")
+                    top_player = pos_insights.get('top_vorp_player')
+                    top_score = pos_insights.get('top_vorp_score', 0)
+                    replacement = pos_insights.get('replacement_level', 0)
+                    if top_player:
+                        st.write(f"Top: {top_player}")
+                        st.write(f"VORP: {top_score:.1f}")
+                        st.write(f"Replacement: {replacement:.1f}")
+    
+    # VORP-ADP Value Analysis
+    if 'vorp_adp_value' in projections.columns:
+        st.write("**VORP-ADP Value Opportunities**")
+        
+        # Show players with best VORP-ADP value
+        best_vorp_values = projections[projections['vorp_adp_value'] > 10].nlargest(15, 'vorp_adp_value')
+        
+        if not best_vorp_values.empty:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("🎯 **Best VORP-ADP Values:**")
+                for _, player in best_vorp_values.head(8).iterrows():
+                    st.write(f"• {player['player_name']} ({player['position']}) - "
+                            f"VORP: {player['vorp_score']:.1f}, "
+                            f"ADP Value: +{player['vorp_adp_value']:.0f}")
+            
+            with col2:
+                # VORP-ADP value distribution
+                vorp_adp_dist = projections['vorp_adp_tier'].value_counts()
+                st.write("**VORP-ADP Value Distribution:**")
+                for tier, count in vorp_adp_dist.items():
+                    st.write(f"• {tier}: {count} players")
+    
+    # VORP Draft Recommendations
+    if hasattr(vorp_calc, 'get_draft_recommendations'):
+        st.write("**VORP-Based Draft Strategy**")
+        vorp_recommendations = vorp_calc.get_draft_recommendations(
+            projections,
+            config['my_roster'],
+            config['draft_position'],
+            config['current_round']
+        )
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("🏆 **Top VORP Targets:**")
+            for player in vorp_recommendations.get('vorp_targets', [])[:6]:
+                st.write(f"• {player['player_name']} ({player['position']}) - "
+                        f"VORP: {player['vorp_score']:.1f} ({player['vorp_tier']})")
+        
+        with col2:
+            current_round = config['current_round']
+            round_strategy = vorp_recommendations.get('round_strategy', {}).get(current_round, "Focus on best available VORP")
+            st.write(f"**Round {current_round} Strategy:**")
+            st.write(round_strategy)
+            
+            if 'sleeper_picks' in vorp_recommendations and vorp_recommendations['sleeper_picks']:
+                st.write("💎 **VORP Sleepers:**")
+                for player in vorp_recommendations['sleeper_picks'][:4]:
+                    st.write(f"• {player['player_name']} ({player['position']}) - "
+                            f"VORP: {player['vorp_score']:.1f}")
 
 def render_draft_assistant(projections: pd.DataFrame, value_calc, tier_manager, config: Dict[str, Any]):
     """Render the draft assistant view"""

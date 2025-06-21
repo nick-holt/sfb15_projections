@@ -22,7 +22,7 @@ def render_sidebar(adp_manager=None) -> Dict:
     st.sidebar.subheader("📊 View Selection")
     view_mode = st.sidebar.selectbox(
         "Dashboard View",
-        ["Player Rankings", "Tier Analysis", "Value Explorer", "Draft Assistant"],
+        ["Player Rankings", "Tier Analysis", "Value Explorer", "VORP Explorer", "Draft Assistant"],
         help="Choose the main dashboard view"
     )
     
@@ -297,6 +297,7 @@ def render_sidebar(adp_manager=None) -> Dict:
         'search_term': search_term,
         'draft_position': draft_position,
         'current_round': current_round,
+        'num_teams': league_size,  # Use num_teams for VORP calculator
         'league_size': league_size,
         'scoring_format': scoring_format,
         'min_projected_points': min_projected_points,
