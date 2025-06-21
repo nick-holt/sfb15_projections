@@ -275,7 +275,7 @@ class LiveDraftView:
                 st.dataframe(recent_df, use_container_width=True)
     
     def _render_live_recommendations(self, draft_state: DraftState):
-        """Render live draft recommendations based on VORP"""
+        """Render live draft recommendations with dynamic VORP"""
         st.subheader("Live Draft Recommendations")
         
         if self.projections_data is None:
@@ -290,6 +290,298 @@ class LiveDraftView:
         
         st.info(f"**{current_team.owner_name}** is on the clock (Pick {draft_state.current_pick})")
         
+        # Get dynamic VORP recommendations
+        draft_manager = st.session_state.draft_manager
+        if hasattr(draft_manager, 'get_dynamic_vorp_recommendations'):
+            try:
+                vorp_recs = draft_manager.get_dynamic_vorp_recommendations(self.projections_data, top_n=15)
+                
+                # Show dynamic vs static toggle
+                show_dynamic = st.checkbox("Show Dynamic VORP (real-time adjusted)", value=True)
+                
+                if vorp_recs['is_dynamic'] and show_dynamic:
+                    st.subheader("🔥 Dynamic VORP Recommendations")
+                    st.caption("Values adjusted for current draft state and position scarcity")
+                    
+                    # Show insights first
+                    insights = vorp_recs.get('insights', {})
+                    recommendations = vorp_recs.get('recommendations', [])
+                    
+                    if insights or recommendations:
+                        with st.expander("📈 Market Insights & Draft Context", expanded=False):
+                            # Show current draft context if available
+                            if recommendations:
+                                rec_df = pd.DataFrame(recommendations)
+                                if 'current_round' in rec_df.columns and 'draft_progress' in rec_df.columns:
+                                    current_round = rec_df['current_round'].iloc[0] if not rec_df.empty else 1
+                                    draft_progress = rec_df['draft_progress'].iloc[0] if not rec_df.empty else 0
+                                    
+                                    st.markdown("**🎯 Draft Context:**")
+                                    context_col1, context_col2, context_col3 = st.columns(3)
+                                    with context_col1:
+                                        st.metric("Current Round", f"Round {current_round}")
+                                    with context_col2:
+                                        st.metric("Draft Progress", f"{draft_progress:.1%}")
+                                    with context_col3:
+                                        draft_stage = "Early" if current_round <= 3 else "Middle" if current_round <= 8 else "Late"
+                                        st.metric("Draft Stage", draft_stage)
+                                    
+                                    st.markdown("---")
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.write("**Position Scarcity:**")
+                                if insights and 'position_scarcity' in insights:
+                                    scarcity = insights.get('position_scarcity', {})
+                                    for pos, data in scarcity.items():
+                                        level = data.get('scarcity_level', 'Unknown')
+                                        multiplier = data.get('scarcity_multiplier', 1.0)
+                                        color = "🔴" if level == "High" else "🟡" if level == "Medium" else "🟢"
+                                        st.write(f"{color} {pos}: {level} ({multiplier:.2f}x)")
+                                elif recommendations:
+                                    # Calculate from recommendations data
+                                    rec_df = pd.DataFrame(recommendations)
+                                    for position in ['QB', 'RB', 'WR', 'TE']:
+                                        pos_data = rec_df[rec_df['position'] == position]
+                                        if not pos_data.empty:
+                                            avg_scarcity = pos_data.get('position_scarcity_multiplier', pd.Series([1.0])).mean()
+                                            if avg_scarcity > 1.2:
+                                                level = "🔴 High"
+                                            elif avg_scarcity > 1.0:
+                                                level = "🟡 Medium"
+                                            else:
+                                                level = "🟢 Low"
+                                            st.write(f"{position}: {level} ({avg_scarcity:.2f}x)")
+                            
+                            with col2:
+                                st.write("**Context Adjustments:**")
+                                if recommendations:
+                                    rec_df = pd.DataFrame(recommendations)
+                                    if 'round_strategy_adjustment' in rec_df.columns:
+                                        for position in ['QB', 'RB', 'WR', 'TE']:
+                                            pos_data = rec_df[rec_df['position'] == position]
+                                            if not pos_data.empty:
+                                                avg_context = pos_data['round_strategy_adjustment'].mean()
+                                                trend = "📈" if avg_context > 1.05 else "📉" if avg_context < 0.95 else "➡️"
+                                                st.write(f"{position}: {trend} {avg_context:.3f}")
+                                    else:
+                                        st.write("Context data not available")
+                                else:
+                                    st.write("**Replacement Level Shifts:**")
+                                    shifts = insights.get('replacement_level_shifts', {})
+                                    for pos, data in shifts.items():
+                                        direction = data.get('direction', 'stable')
+                                        avg_shift = data.get('average_shift', 0)
+                                        arrow = "⬆️" if direction == "increased" else "⬇️" if direction == "decreased" else "➡️"
+                                        st.write(f"{arrow} {pos}: {direction} ({avg_shift:+.1f})")
+                            
+                            # Show Feature 2 context awareness info
+                            if recommendations:
+                                rec_df = pd.DataFrame(recommendations)
+                                if 'round_strategy_adjustment' in rec_df.columns:
+                                    st.markdown("---")
+                                    st.markdown("**🧠 Context Awareness Features:**")
+                                    st.write("✓ Round-specific strategy adjustments")
+                                    st.write("✓ Snake draft position optimization")
+                                    st.write("✓ Draft timing considerations")
+                                    st.write("✓ Positional value curve adjustments")
+                                    
+                                # Feature 3: Roster Construction Analysis
+                                if 'roster_construction_multiplier' in rec_df.columns:
+                                    st.markdown("---")
+                                    st.markdown("**🏗️ Roster Construction Analysis:**")
+                                    
+                                    # Show current team roster composition
+                                    if insights and 'roster_construction' in insights:
+                                        roster_info = insights['roster_construction']
+                                        
+                                        col1, col2 = st.columns(2)
+                                        with col1:
+                                            st.write("**Current Roster:**")
+                                            current_roster = roster_info.get('current_roster', {})
+                                            if current_roster:
+                                                for pos, count in current_roster.items():
+                                                    st.write(f"• {pos}: {count}")
+                                            else:
+                                                st.write("• No picks yet")
+                                            
+                                            balance_score = roster_info.get('roster_balance_score', 0)
+                                            balance_emoji = "🟢" if balance_score > 0.8 else "🟡" if balance_score > 0.6 else "🔴"
+                                            st.write(f"**Balance Score:** {balance_emoji} {balance_score:.1%}")
+                                        
+                                        with col2:
+                                            st.write("**Positional Needs:**")
+                                            needs = roster_info.get('positional_needs', {})
+                                            for pos, need in needs.items():
+                                                emoji = "🚨" if need == "Critical" else "⚠️" if need == "Moderate" else "✅" if need == "Satisfied" else "📈"
+                                                st.write(f"{emoji} {pos}: {need}")
+                                        
+                                        # Show roster recommendations
+                                        recommendations_list = roster_info.get('roster_recommendations', [])
+                                        if recommendations_list:
+                                            st.write("**Recommendations:**")
+                                            for rec in recommendations_list:
+                                                st.write(f"• {rec}")
+                                    
+                                    st.write("✓ Team positional need analysis")
+                                    st.write("✓ Roster balance optimization")
+                                    st.write("✓ League-wide position scarcity tracking")
+                                    st.write("✓ Bye week conflict avoidance")
+                                
+                                # Feature 4: Market Inefficiency Detection
+                                if 'market_inefficiency_multiplier' in rec_df.columns:
+                                    st.markdown("---")
+                                    st.markdown("**📊 Market Inefficiency Detection:**")
+                                    
+                                    # Show market inefficiency insights
+                                    if insights and 'market_inefficiency' in insights:
+                                        market_info = insights['market_inefficiency']
+                                        
+                                        col1, col2 = st.columns(2)
+                                        with col1:
+                                            # Market efficiency score
+                                            efficiency = market_info.get('market_efficiency_score', {})
+                                            if efficiency and efficiency.get('score') != 'N/A':
+                                                score = efficiency.get('score', 'N/A')
+                                                description = efficiency.get('description', '')
+                                                correlation = efficiency.get('correlation', 'N/A')
+                                                st.write(f"**Market Efficiency:** {score}")
+                                                st.write(f"*{description}*")
+                                                st.write(f"ADP-VORP Correlation: {correlation}")
+                                            
+                                            # Position runs
+                                            position_runs = market_info.get('position_runs', {})
+                                            if position_runs:
+                                                st.write("**🏃 Active Position Runs:**")
+                                                for pos, run_data in position_runs.items():
+                                                    severity = run_data.get('severity', 'Medium')
+                                                    count = run_data.get('count', 0)
+                                                    emoji = "🚨" if severity == "High" else "⚠️"
+                                                    st.write(f"{emoji} {pos}: {count} in last 5 picks")
+                                        
+                                        with col2:
+                                            # Contrarian opportunities
+                                            opportunities = market_info.get('contrarian_opportunities', [])
+                                            if opportunities:
+                                                st.write("**💎 Contrarian Opportunities:**")
+                                                for opp in opportunities[:3]:  # Top 3
+                                                    player = opp.get('player_name', 'Unknown')
+                                                    rank_diff = opp.get('rank_diff', 0)
+                                                    confidence = opp.get('confidence', 'Medium')
+                                                    emoji = "⭐" if confidence == "High" else "💡"
+                                                    st.write(f"{emoji} {player} (+{rank_diff:.0f} value gap)")
+                                            
+                                            # Draft flow predictions
+                                            flow = market_info.get('draft_flow_predictions', {})
+                                            next_round = flow.get('next_round_positions', {})
+                                            if next_round:
+                                                st.write("**🔮 Next Round Predictions:**")
+                                                for pos, pred in next_round.items():
+                                                    likelihood = pred.get('likelihood', 'Average')
+                                                    if likelihood != 'Average':
+                                                        emoji = "📈" if "High" in likelihood or "Above" in likelihood else "📉"
+                                                        st.write(f"{emoji} {pos}: {likelihood}")
+                                    
+                                    st.write("✓ ADP vs VORP gap analysis")
+                                    st.write("✓ Position run detection")
+                                    st.write("✓ Contrarian opportunity identification")
+                                    st.write("✓ Draft flow predictions")
+                    
+                    # Current team specific recommendations
+                    team_recs = vorp_recs.get('current_team_recommendations', {})
+                    if team_recs:
+                        st.write("**🎯 Position-Specific for Current Team:**")
+                        for pos, players in team_recs.items():
+                            if players:
+                                with st.expander(f"{pos} Recommendations ({len(players)} players)", expanded=True):
+                                    for player in players[:3]:  # Top 3 per position
+                                        col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                                        with col1:
+                                            st.write(f"**{player['player_name']}** ({player['team']})")
+                                        with col2:
+                                            static_vorp = player.get('static_vorp', 0)
+                                            st.metric("Static VORP", f"{static_vorp:.1f}")
+                                        with col3:
+                                            dynamic_vorp = player.get('dynamic_vorp_final', 0)
+                                            st.metric("Dynamic VORP", f"{dynamic_vorp:.1f}")
+                                        with col4:
+                                            change = player.get('vorp_change', 0)
+                                            delta_color = "normal" if abs(change) < 1 else "inverse" if change < 0 else "normal"
+                                            st.metric("Change", f"{change:+.1f}", delta_color=delta_color)
+                    
+                    # Top overall recommendations
+                    st.write("**🏆 Top Overall Available Players:**")
+                    top_recs = vorp_recs['recommendations'][:10]
+                    
+                    for i, player in enumerate(top_recs):
+                        with st.container():
+                            col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
+                            
+                            with col1:
+                                rank_change = ""
+                                if 'dynamic_vorp_overall_rank' in player:
+                                    rank = int(player['dynamic_vorp_overall_rank'])
+                                    rank_change = f" (#{rank})"
+                                st.write(f"**{i+1}.** {player['player_name']} ({player['position']} - {player['team']}){rank_change}")
+                            
+                            with col2:
+                                static_vorp = player.get('static_vorp', 0)
+                                st.metric("Static", f"{static_vorp:.1f}")
+                            
+                            with col3:
+                                dynamic_vorp = player.get('dynamic_vorp_final', 0)
+                                st.metric("Dynamic", f"{dynamic_vorp:.1f}")
+                            
+                            with col4:
+                                change = player.get('vorp_change', 0)
+                                delta_color = "normal" if abs(change) < 1 else "inverse" if change < 0 else "normal"
+                                st.metric("Change", f"{change:+.1f}", delta_color=delta_color)
+                            
+                            with col5:
+                                scarcity = player.get('position_scarcity_multiplier', 1.0)
+                                scarcity_color = "🔴" if scarcity > 1.2 else "🟡" if scarcity > 1.0 else "🟢"
+                                st.write(f"{scarcity_color} {scarcity:.2f}x")
+                
+                else:
+                    # Fallback to static VORP
+                    st.subheader("📊 Static VORP Recommendations")
+                    if not vorp_recs['is_dynamic']:
+                        st.caption(vorp_recs.get('message', 'Pre-draft baseline values'))
+                    
+                    static_recs = vorp_recs['recommendations'][:10]
+                    for i, player in enumerate(static_recs):
+                        with st.container():
+                            col1, col2, col3, col4 = st.columns([3, 1, 1, 2])
+                            
+                            with col1:
+                                st.write(f"**{i+1}.** {player['player_name']} ({player['position']} - {player['team']})")
+                            
+                            with col2:
+                                vorp = player.get('vorp_score', player.get('static_vorp', 0))
+                                st.metric("VORP", f"{vorp:.1f}")
+                            
+                            with col3:
+                                st.metric("Proj Pts", f"{player.get('projected_points', 0):.1f}")
+                            
+                            with col4:
+                                team_analysis = draft_manager.get_team_needs_analysis(current_team.roster_id)
+                                need_level = self._assess_positional_need(player['position'], team_analysis)
+                                st.write(f"Need: {need_level}")
+                
+            except Exception as e:
+                st.error(f"Error getting dynamic VORP recommendations: {e}")
+                # Fallback to basic recommendations
+                self._render_basic_recommendations(draft_state)
+        else:
+            # Fallback to basic recommendations
+            self._render_basic_recommendations(draft_state)
+    
+    def _render_basic_recommendations(self, draft_state: DraftState):
+        """Render basic recommendations when dynamic VORP is not available"""
+        current_team = draft_state.get_current_team()
+        draft_manager = st.session_state.draft_manager
+        
         # Get available players with projections
         available_players = self._get_available_players_with_projections(draft_state)
         
@@ -297,8 +589,6 @@ class LiveDraftView:
             st.warning("No available players with projection data")
             return
         
-        # Get team needs
-        draft_manager = st.session_state.draft_manager
         team_analysis = draft_manager.get_team_needs_analysis(current_team.roster_id)
         
         # Filter recommendations by need

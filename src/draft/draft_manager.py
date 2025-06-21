@@ -14,6 +14,10 @@ import time
 from .draft_state import DraftState, DraftSettings, DraftPick, TeamRoster
 from .sleeper_client import SleeperClient, SleeperDraftMonitor, SleeperPlayerCache, SleeperAPIError
 from ..utils.name_normalizer import name_normalizer
+try:
+    from ..analytics.dynamic_vorp_calculator import DynamicVORPCalculator
+except ImportError:
+    from analytics.dynamic_vorp_calculator import DynamicVORPCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,9 @@ class DraftManager:
         self.draft_state: Optional[DraftState] = None
         self.is_monitoring = False
         self.monitor_thread: Optional[threading.Thread] = None
+        
+        # Dynamic VORP calculator
+        self.dynamic_vorp_calc: Optional[DynamicVORPCalculator] = None
         
         # Callbacks for real-time updates
         self._pick_callbacks: List[Callable[[DraftPick], None]] = []
@@ -138,6 +145,11 @@ class DraftManager:
             
             # Initialize player name mapping for projections
             self._build_player_name_map()
+            
+            # Initialize dynamic VORP calculator if we have projections
+            if self.projections_data:
+                num_teams = self.draft_state.settings.total_teams
+                self.dynamic_vorp_calc = DynamicVORPCalculator(num_teams=num_teams)
             
             draft_type = "league draft" if league_id and league_info else "mock draft"
             logger.info(f"Initialized {draft_type} {self.draft_id} with {len(existing_picks)} existing picks")
@@ -432,6 +444,155 @@ class DraftManager:
                 for pick in self.draft_state.picks[-10:]  # Last 10 picks
             ]
         }
+    
+    def get_dynamic_vorp_recommendations(self, 
+                                       projections_df,
+                                       top_n: int = 20) -> Dict[str, Any]:
+        """
+        Get dynamic VORP-based recommendations for the current draft state
+        
+        Args:
+            projections_df: DataFrame with player projections
+            top_n: Number of top recommendations to return
+            
+        Returns:
+            Dictionary with dynamic VORP recommendations and insights
+        """
+        if not self.dynamic_vorp_calc or not self.draft_state:
+            # Fallback to static VORP if dynamic not available
+            from ..analytics.vorp_calculator import VORPCalculator
+            static_calc = VORPCalculator(num_teams=12)
+            df_with_vorp = static_calc.calculate_vorp_scores(projections_df.copy())
+            
+            return {
+                'recommendations': df_with_vorp.nlargest(top_n, 'vorp_score')[
+                    ['player_name', 'position', 'team', 'projected_points', 'vorp_score']
+                ].to_dict('records'),
+                'is_dynamic': False,
+                'message': 'Static VORP recommendations (no draft state available)'
+            }
+        
+        try:
+            # Calculate dynamic VORP with current draft state
+            df_with_dynamic_vorp = self.dynamic_vorp_calc.calculate_dynamic_vorp(
+                projections_df.copy(), 
+                self.draft_state
+            )
+            
+            # Filter out already drafted players
+            drafted_players = {pick.player_id for pick in self.draft_state.picks}
+            available_players = df_with_dynamic_vorp[
+                ~df_with_dynamic_vorp['player_id'].isin(drafted_players)
+            ]
+            
+            # Get top recommendations by dynamic VORP
+            top_recommendations = available_players.nlargest(top_n, 'dynamic_vorp_final')
+            
+            # Get current team on the clock for targeted recommendations
+            current_team = self.draft_state.get_current_team()
+            current_team_needs = {}
+            if current_team:
+                current_team_needs = {
+                    'QB': current_team.needs_qb,
+                    'RB': current_team.needs_rb,
+                    'WR': current_team.needs_wr,
+                    'TE': current_team.needs_te,
+                }
+            
+            # Get position-specific recommendations for current team
+            position_recs = {}
+            for pos, need in current_team_needs.items():
+                if need > 0:  # Only if team needs this position
+                    pos_players = available_players[available_players['position'] == pos]
+                    if not pos_players.empty:
+                        position_recs[pos] = pos_players.nlargest(5, 'dynamic_vorp_final')[
+                            ['player_name', 'position', 'team', 'projected_points', 
+                             'static_vorp', 'dynamic_vorp_final', 'vorp_change']
+                        ].to_dict('records')
+            
+            # Generate insights
+            insights = self.dynamic_vorp_calc.get_dynamic_vorp_insights(df_with_dynamic_vorp, self.draft_state)
+            
+            return {
+                'recommendations': top_recommendations[
+                    ['player_name', 'position', 'team', 'projected_points', 
+                     'static_vorp', 'dynamic_vorp_final', 'vorp_change',
+                     'position_scarcity_multiplier', 'dynamic_vorp_overall_rank']
+                ].to_dict('records'),
+                'current_team_recommendations': position_recs,
+                'current_team_info': {
+                    'team_name': current_team.team_name if current_team else 'Unknown',
+                    'owner_name': current_team.owner_name if current_team else 'Unknown',
+                    'needs': current_team_needs
+                } if current_team else {},
+                'insights': insights,
+                'is_dynamic': True,
+                'draft_context': {
+                    'picks_made': len(self.draft_state.picks),
+                    'current_round': self.draft_state.current_round,
+                    'current_pick': self.draft_state.current_pick
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating dynamic VORP recommendations: {e}")
+            # Fallback to static recommendations
+            return self.get_dynamic_vorp_recommendations(projections_df, top_n)
+    
+    def get_vorp_comparison_for_player(self, player_id: str, projections_df) -> Dict[str, Any]:
+        """
+        Get detailed VORP comparison (static vs dynamic) for a specific player
+        
+        Args:
+            player_id: Player ID to analyze
+            projections_df: DataFrame with player projections
+            
+        Returns:
+            Dictionary with detailed VORP analysis for the player
+        """
+        if not self.dynamic_vorp_calc or not self.draft_state:
+            return {'error': 'Dynamic VORP not available'}
+        
+        try:
+            # Calculate dynamic VORP
+            df_with_dynamic_vorp = self.dynamic_vorp_calc.calculate_dynamic_vorp(
+                projections_df.copy(), 
+                self.draft_state
+            )
+            
+            # Find the player
+            player_data = df_with_dynamic_vorp[df_with_dynamic_vorp['player_id'] == player_id]
+            if player_data.empty:
+                return {'error': f'Player {player_id} not found'}
+            
+            player_row = player_data.iloc[0]
+            
+            return {
+                'player_name': player_row['player_name'],
+                'position': player_row['position'],
+                'team': player_row['team'],
+                'projected_points': player_row['projected_points'],
+                'static_vorp': player_row['static_vorp'],
+                'dynamic_vorp': player_row['dynamic_vorp_final'],
+                'vorp_change': player_row['vorp_change'],
+                'static_rank': player_row['vorp_overall_rank'],
+                'dynamic_rank': player_row['dynamic_vorp_overall_rank'],
+                'rank_change': player_row['vorp_overall_rank'] - player_row['dynamic_vorp_overall_rank'],
+                'market_factors': {
+                    'position_scarcity': player_row['position_scarcity_multiplier'],
+                    'tier_depletion': player_row['tier_depletion_factor'],
+                    'round_strategy': player_row['round_strategy_adjustment']
+                },
+                'context': {
+                    'replacement_level_shift': player_row['replacement_level_shift'],
+                    'current_round': self.draft_state.current_round,
+                    'picks_made': len(self.draft_state.picks)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting VORP comparison for player {player_id}: {e}")
+            return {'error': str(e)}
 
 class DraftDiscovery:
     """Helper class for discovering drafts from league or user information"""
