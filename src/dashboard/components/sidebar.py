@@ -6,9 +6,12 @@ Dashboard configuration and filtering controls
 import streamlit as st
 from typing import Dict, List
 
-def render_sidebar() -> Dict:
+def render_sidebar(adp_manager=None) -> Dict:
     """
     Render the sidebar with configuration options
+    
+    Args:
+        adp_manager: Optional ADPManager instance for source controls
     
     Returns:
         Dictionary with sidebar configuration values
@@ -84,6 +87,103 @@ def render_sidebar() -> Dict:
         value=1,
         help="Current draft round"
     )
+    
+    # ADP Source Configuration
+    st.sidebar.subheader("🎯 ADP Source Configuration")
+    
+    # Primary ADP source selection
+    primary_adp_source = st.sidebar.selectbox(
+        "Primary ADP Source",
+        ["sfb15", "sleeper", "fantasypros"],
+        index=0,  # Default to SFB15
+        help="Choose your primary ADP source for value calculations",
+        key="primary_adp_source_select"
+    )
+    
+    # Show source health status if manager is available
+    if adp_manager:
+        try:
+            source_status = adp_manager.get_source_health_status()
+            
+            if source_status:
+                st.sidebar.write("**📡 Source Status:**")
+                
+                for source, status in source_status.items():
+                    status_emoji = {
+                        'healthy': '🟢',
+                        'stale': '🟡', 
+                        'offline': '🔴'
+                    }.get(status.get('status', 'offline'), '🔴')
+                    
+                    player_count = status.get('player_count', 0)
+                    hours_old = status.get('last_updated_hours')
+                    
+                    if hours_old is not None:
+                        time_info = f" ({hours_old:.1f}h old)" if hours_old < 24 else f" ({hours_old/24:.1f}d old)"
+                    else:
+                        time_info = ""
+                    
+                    st.sidebar.write(f"{status_emoji} **{source.upper()}**: {player_count} players{time_info}")
+        except Exception as e:
+            st.sidebar.warning("⚠️ Unable to check ADP source status")
+    
+    # Advanced ADP blending
+    advanced_adp_blending = st.sidebar.checkbox(
+        "Advanced ADP Blending",
+        value=False,
+        help="Enable custom weighting of ADP sources",
+        key="advanced_adp_blending_checkbox"
+    )
+    
+    source_weights = {}
+    if advanced_adp_blending:
+        st.sidebar.write("**Source Weights:**")
+        
+        sfb15_weight = st.sidebar.slider(
+            "SFB15 Weight",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.70,
+            step=0.05,
+            help="Weight for SFB15 ADP data",
+            key="sfb15_weight_slider"
+        )
+        
+        sleeper_weight = st.sidebar.slider(
+            "Sleeper Weight", 
+            min_value=0.0,
+            max_value=1.0,
+            value=0.20,
+            step=0.05,
+            help="Weight for Sleeper ADP data",
+            key="sleeper_weight_slider"
+        )
+        
+        fp_weight = st.sidebar.slider(
+            "FantasyPros Weight",
+            min_value=0.0, 
+            max_value=1.0,
+            value=0.10,
+            step=0.05,
+            help="Weight for FantasyPros ADP data",
+            key="fp_weight_slider"
+        )
+        
+        # Normalize weights
+        total_weight = sfb15_weight + sleeper_weight + fp_weight
+        if total_weight > 0:
+            source_weights = {
+                'sfb15': sfb15_weight / total_weight,
+                'sleeper': sleeper_weight / total_weight,
+                'fantasypros': fp_weight / total_weight
+            }
+            
+            # Show normalized weights
+            st.sidebar.write("**Normalized:**")
+            for source, weight in source_weights.items():
+                st.sidebar.write(f"• {source.upper()}: {weight:.1%}")
+        else:
+            source_weights = {'sfb15': 1.0}  # Fallback
     
     # League settings
     st.sidebar.subheader("🏟️ League Settings")
@@ -203,5 +303,8 @@ def render_sidebar() -> Dict:
         'max_age': max_age,
         'confidence_levels': confidence_levels,
         'injury_risk_filter': injury_risk_filter,
-        'my_roster': my_roster
+        'my_roster': my_roster,
+        'primary_adp_source': primary_adp_source,
+        'advanced_adp_blending': advanced_adp_blending,
+        'source_weights': source_weights
     } 

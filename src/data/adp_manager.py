@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ADP Manager for SFB15 Fantasy Football Dashboard
-Handles multiple ADP data sources and integration
+Enhanced ADP Manager for SFB15 Fantasy Football Dashboard
+Handles multiple ADP data sources with SFB15-specific integration
 """
 
 import pandas as pd
@@ -15,18 +15,35 @@ from typing import Dict, List, Optional, Tuple
 import logging
 import os
 
+# Import the SFB15 scraper
+from .sfb15_adp_scraper import SFB15ADPScraper
+
 class ADPManager:
     """Manages ADP data from multiple sources"""
     
     def __init__(self, data_dir: str = "data/adp"):
         self.data_dir = data_dir
         self.logger = self._setup_logging()
+        
+        # Initialize SFB15 scraper
+        self.sfb15_scraper = SFB15ADPScraper(data_dir)
+        
+        # Configure ADP sources with SFB15 as primary
         self.adp_sources = {
+            'sfb15': 'https://goingfor2.com/sfb15adp/',  # Primary for SFB15
             'sleeper': 'https://api.sleeper.app/v1/players/nfl/trending/add',
             'fantasypros': 'https://www.fantasypros.com/nfl/adp/ppr.php',
             'underdog': 'https://underdogfantasy.com/pick-em/higher-lower/nfl',
             'yahoo': 'https://football.fantasysports.yahoo.com/f1/draftanalysis'
         }
+        
+        # Source weights for blended ADP (SFB15 gets highest weight)
+        self.source_weights = {
+            'sfb15': 0.70,      # Primary for tournament play
+            'sleeper': 0.20,    # Secondary for market context
+            'fantasypros': 0.10  # Tertiary for consensus view
+        }
+        
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
@@ -46,6 +63,14 @@ class ADPManager:
             logger.addHandler(handler)
             
         return logger
+    
+    def fetch_sfb15_adp(self) -> pd.DataFrame:
+        """Fetch SFB15-specific ADP data from GoingFor2"""
+        try:
+            return self.sfb15_scraper.get_sfb15_adp()
+        except Exception as e:
+            self.logger.error(f"Error fetching SFB15 ADP: {str(e)}")
+            return pd.DataFrame()
     
     def fetch_sleeper_adp(self) -> pd.DataFrame:
         """Fetch ADP data from Sleeper API"""
@@ -160,13 +185,15 @@ class ADPManager:
     def aggregate_adp_data(self, sources: List[str] = None) -> pd.DataFrame:
         """Aggregate ADP data from multiple sources"""
         if sources is None:
-            sources = ['sleeper', 'fantasypros']
+            sources = ['sfb15', 'sleeper', 'fantasypros']  # Default includes SFB15
         
         all_adp_data = []
         
         for source in sources:
             try:
-                if source == 'sleeper':
+                if source == 'sfb15':
+                    df = self.fetch_sfb15_adp()
+                elif source == 'sleeper':
                     df = self.fetch_sleeper_adp()
                 elif source == 'fantasypros':
                     df = self.fetch_fantasypros_adp()
@@ -342,4 +369,213 @@ class ADPManager:
                 
         except Exception as e:
             self.logger.error(f"Error updating ADP data: {str(e)}")
-            return pd.DataFrame() 
+            return pd.DataFrame()
+    
+    def get_blended_adp(self, sources: List[str] = None, weights: Dict[str, float] = None) -> pd.DataFrame:
+        """Get weighted blend of ADP from multiple sources"""
+        try:
+            if sources is None:
+                sources = list(self.source_weights.keys())
+            
+            if weights is None:
+                weights = self.source_weights
+            
+            # Fetch data from all sources
+            source_data = {}
+            for source in sources:
+                if source == 'sfb15':
+                    data = self.fetch_sfb15_adp()
+                elif source == 'sleeper':
+                    data = self.fetch_sleeper_adp()
+                elif source == 'fantasypros':
+                    data = self.fetch_fantasypros_adp()
+                else:
+                    continue
+                
+                if not data.empty:
+                    source_data[source] = data
+            
+            if not source_data:
+                self.logger.error("No ADP data available from any source")
+                return pd.DataFrame()
+            
+            # Calculate weighted ADP
+            blended_data = []
+            
+            # Get all unique player names
+            all_players = set()
+            for data in source_data.values():
+                all_players.update(data['name'].tolist())
+            
+            for player_name in all_players:
+                weighted_adp = 0
+                total_weight = 0
+                player_info = {}
+                
+                for source, data in source_data.items():
+                    player_data = data[data['name'] == player_name]
+                    
+                    if len(player_data) > 0:
+                        weight = weights.get(source, 0)
+                        adp_value = player_data.iloc[0]['consensus_adp']
+                        
+                        weighted_adp += adp_value * weight
+                        total_weight += weight
+                        
+                        # Store player info from highest weighted source
+                        if weight == max(weights.get(s, 0) for s in source_data.keys()):
+                            player_info = {
+                                'name': player_name,
+                                'position': player_data.iloc[0].get('position', ''),
+                                'team': player_data.iloc[0].get('team', ''),
+                                'age': player_data.iloc[0].get('age')
+                            }
+                
+                if total_weight > 0:
+                    final_adp = weighted_adp / total_weight
+                    
+                    blended_data.append({
+                        **player_info,
+                        'consensus_adp': round(final_adp, 1),
+                        'sources': list(source_data.keys()),
+                        'sources_count': len(source_data),
+                        'blend_weights': weights,
+                        'last_updated': datetime.now()
+                    })
+            
+            if blended_data:
+                df = pd.DataFrame(blended_data)
+                df = df.sort_values('consensus_adp').reset_index(drop=True)
+                df['overall_rank'] = range(1, len(df) + 1)
+                
+                self.logger.info(f"Created blended ADP for {len(df)} players using sources: {list(source_data.keys())}")
+                return df
+            else:
+                return pd.DataFrame()
+                
+        except Exception as e:
+            self.logger.error(f"Error creating blended ADP: {str(e)}")
+            return pd.DataFrame()
+    
+    def switch_primary_source(self, source: str) -> None:
+        """Dynamically switch primary ADP source"""
+        try:
+            if source not in self.adp_sources:
+                self.logger.error(f"Unknown ADP source: {source}")
+                return
+            
+            # Adjust weights to make the selected source primary
+            if source == 'sfb15':
+                self.source_weights = {'sfb15': 0.70, 'sleeper': 0.20, 'fantasypros': 0.10}
+            elif source == 'sleeper':
+                self.source_weights = {'sleeper': 0.60, 'sfb15': 0.30, 'fantasypros': 0.10}
+            elif source == 'fantasypros':
+                self.source_weights = {'fantasypros': 0.60, 'sfb15': 0.25, 'sleeper': 0.15}
+            
+            self.logger.info(f"Switched primary ADP source to {source}")
+            
+        except Exception as e:
+            self.logger.error(f"Error switching primary source: {str(e)}")
+    
+    def compare_adp_sources(self) -> pd.DataFrame:
+        """Compare ADP across all available sources"""
+        try:
+            # Fetch data from all sources
+            sfb15_data = self.fetch_sfb15_adp()
+            sleeper_data = self.fetch_sleeper_adp()
+            fp_data = self.fetch_fantasypros_adp()
+            
+            # Start with SFB15 as base
+            if sfb15_data.empty:
+                self.logger.warning("No SFB15 data available for comparison")
+                return pd.DataFrame()
+            
+            comparison_df = sfb15_data[['name', 'position', 'consensus_adp']].copy()
+            comparison_df.rename(columns={'consensus_adp': 'sfb15_adp'}, inplace=True)
+            
+            # Add Sleeper data
+            if not sleeper_data.empty:
+                sleeper_subset = sleeper_data[['name', 'consensus_adp']].copy()
+                sleeper_subset.rename(columns={'consensus_adp': 'sleeper_adp'}, inplace=True)
+                comparison_df = pd.merge(comparison_df, sleeper_subset, on='name', how='left')
+            
+            # Add FantasyPros data
+            if not fp_data.empty:
+                fp_subset = fp_data[['name', 'consensus_adp']].copy()
+                fp_subset.rename(columns={'consensus_adp': 'fantasypros_adp'}, inplace=True)
+                comparison_df = pd.merge(comparison_df, fp_subset, on='name', how='left')
+            
+            # Calculate differences
+            if 'sleeper_adp' in comparison_df.columns:
+                comparison_df['sfb15_vs_sleeper'] = comparison_df['sleeper_adp'] - comparison_df['sfb15_adp']
+            
+            if 'fantasypros_adp' in comparison_df.columns:
+                comparison_df['sfb15_vs_fantasypros'] = comparison_df['fantasypros_adp'] - comparison_df['sfb15_adp']
+            
+            # Identify biggest differences (SFB15 value opportunities)
+            comparison_df['max_difference'] = 0
+            diff_cols = [col for col in comparison_df.columns if 'sfb15_vs_' in col]
+            
+            if diff_cols:
+                comparison_df['max_difference'] = comparison_df[diff_cols].max(axis=1, skipna=True)
+                comparison_df['value_type'] = comparison_df['max_difference'].apply(
+                    lambda x: 'SFB15 Value' if x > 20 else 'Industry Value' if x < -20 else 'Similar'
+                )
+            
+            # Sort by biggest SFB15 values first
+            comparison_df = comparison_df.sort_values('max_difference', ascending=False)
+            
+            self.logger.info(f"Compared ADP across sources for {len(comparison_df)} players")
+            return comparison_df
+            
+        except Exception as e:
+            self.logger.error(f"Error comparing ADP sources: {str(e)}")
+            return pd.DataFrame()
+    
+    def get_source_health_status(self) -> Dict[str, Dict]:
+        """Get health status of all ADP sources"""
+        try:
+            status = {}
+            
+            # Check SFB15 source
+            sfb15_age = self.sfb15_scraper.get_adp_age_hours()
+            status['sfb15'] = {
+                'available': sfb15_age != float('inf'),
+                'last_updated_hours': sfb15_age if sfb15_age != float('inf') else None,
+                'status': 'healthy' if sfb15_age < 4 else 'stale' if sfb15_age < 24 else 'offline',
+                'player_count': 0
+            }
+            
+            # Get player count if data is available
+            try:
+                sfb15_data = self.sfb15_scraper.load_cached_adp_data()
+                if not sfb15_data.empty:
+                    status['sfb15']['player_count'] = len(sfb15_data)
+            except:
+                pass
+            
+            # Check other sources (simplified)
+            for source in ['sleeper', 'fantasypros']:
+                try:
+                    if source == 'sleeper':
+                        data = self.fetch_sleeper_adp()
+                    else:
+                        data = self.fetch_fantasypros_adp()
+                    
+                    status[source] = {
+                        'available': not data.empty,
+                        'status': 'healthy' if not data.empty else 'offline',
+                        'player_count': len(data) if not data.empty else 0
+                    }
+                except:
+                    status[source] = {
+                        'available': False,
+                        'status': 'offline',
+                        'player_count': 0
+                    }
+            
+            return status
+            
+        except Exception as e:
+            self.logger.error(f"Error getting source health status: {str(e)}")
+            return {} 

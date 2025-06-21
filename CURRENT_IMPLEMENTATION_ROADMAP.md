@@ -5,6 +5,164 @@
 
 ---
 
+## 🚨 P0 CRITICAL: SFB15-Specific ADP Integration (IMMEDIATE)
+
+**Priority Level**: P0 (HIGHEST - Must implement before any other work)
+**Estimated Time**: 3-4 hours
+**Dependencies**: None - this is foundational for draft accuracy
+
+### Why This is P0 Critical:
+- Industry ADP (Sleeper/FantasyPros) is optimized for standard leagues
+- SFB15 has unique scoring that dramatically changes player values
+- GoingFor2 runs actual SFB15 mock drafts providing true tournament ADP
+- Without SFB15 ADP, our value calculations are meaningless for tournament play
+- This is the difference between a hobby tool and a competitive advantage
+
+### Implementation Tasks:
+
+#### Task P0.1: SFB15 ADP Scraper (1.5 hours)
+**Objective**: Build robust scraper for GoingFor2 SFB15 ADP data
+
+**Data Source Analysis**:
+- URL: https://goingfor2.com/sfb15adp/
+- Table structure: Rank | Position | First Name | Last Name | ADP | Number of Mocks
+- Current data: 299 players with live ADP values
+- Updates: Real-time based on actual SFB15 mock drafts
+
+**Implementation**:
+```python
+# src/data/sfb15_adp_scraper.py
+class SFB15ADPScraper:
+    def __init__(self):
+        self.base_url = "https://goingfor2.com/sfb15adp/"
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 SFB15-Dashboard/1.0'
+        }
+    
+    def scrape_live_adp(self) -> pd.DataFrame:
+        """Scrape current SFB15 ADP table"""
+        # Parse the table with 299+ players
+        # Handle dynamic loading if needed
+        # Return standardized DataFrame
+        
+    def parse_adp_table(self, soup) -> pd.DataFrame:
+        """Parse the ADP table from BeautifulSoup object"""
+        # Extract table rows with player data
+        # Handle name concatenation (First + Last)
+        # Validate ADP numeric values
+        
+    def validate_adp_data(self, df: pd.DataFrame) -> bool:
+        """Validate scraped data quality"""
+        # Check for expected player count
+        # Validate ADP ranges
+        # Ensure no missing critical data
+```
+
+**Deliverables**:
+- [ ] Functional SFB15 ADP scraper
+- [ ] Error handling for scraping failures
+- [ ] Data validation and quality checks
+- [ ] Fallback to cached data if scraping fails
+
+#### Task P0.2: Multi-Source ADP Management (1 hour)
+**Objective**: Enhance ADPManager to handle multiple ADP sources with dynamic weighting
+
+**Implementation**:
+```python
+# Enhanced src/data/adp_manager.py
+class EnhancedADPManager:
+    def __init__(self):
+        self.sources = {
+            'sfb15': SFB15ADPScraper(),
+            'sleeper': SleeperADPFetcher(),
+            'fantasypros': FantasyProsADPFetcher()
+        }
+        self.source_weights = {
+            'sfb15': 0.70,      # Primary source for SFB15
+            'sleeper': 0.20,    # Secondary for market context
+            'fantasypros': 0.10  # Tertiary for consensus view
+        }
+    
+    def get_blended_adp(self, sources: List[str] = None, 
+                       weights: Dict[str, float] = None) -> pd.DataFrame:
+        """Calculate weighted ADP from multiple sources"""
+        
+    def switch_primary_source(self, source: str) -> None:
+        """Dynamically switch primary ADP source"""
+        
+    def compare_adp_sources(self) -> pd.DataFrame:
+        """Compare ADP across all sources for analysis"""
+```
+
+**Deliverables**:
+- [ ] Multi-source ADP blending
+- [ ] Dynamic source weighting
+- [ ] Source comparison analytics
+- [ ] Real-time source switching in UI
+
+#### Task P0.3: Dashboard ADP Source Controls (0.5 hours)
+**Objective**: Add UI controls for ADP source management
+
+**Implementation**:
+```python
+# Enhanced sidebar controls
+def render_adp_source_controls():
+    st.subheader("🎯 ADP Source Configuration")
+    
+    # Primary source selection
+    primary_source = st.selectbox(
+        "Primary ADP Source",
+        options=['sfb15', 'sleeper', 'fantasypros'],
+        index=0,  # Default to SFB15
+        help="Choose your primary ADP source"
+    )
+    
+    # Source weighting sliders
+    if st.checkbox("Advanced Blending"):
+        sfb15_weight = st.slider("SFB15 Weight", 0.0, 1.0, 0.70)
+        sleeper_weight = st.slider("Sleeper Weight", 0.0, 1.0, 0.20)
+        fp_weight = st.slider("FantasyPros Weight", 0.0, 1.0, 0.10)
+        
+    # Live source status indicators
+    render_source_status_indicators()
+```
+
+**Deliverables**:
+- [ ] ADP source selection controls
+- [ ] Blending weight sliders
+- [ ] Source health indicators
+- [ ] Real-time ADP switching
+
+#### Task P0.4: SFB15-Specific Value Calculations (1 hour)
+**Objective**: Recalibrate value calculations using SFB15 ADP
+
+**Key Changes**:
+- Replace industry ADP with SFB15 ADP in all value calculations
+- Adjust value tier thresholds for SFB15 context
+- Add SFB15-specific market efficiency metrics
+- Create SFB15 draft strategy recommendations
+
+**Deliverables**:
+- [ ] SFB15-calibrated value metrics
+- [ ] Updated sleeper/bust identification
+- [ ] SFB15 market efficiency scoring
+- [ ] Tournament-specific draft strategy
+
+### Success Metrics:
+- [ ] Successfully scraping 290+ players from GoingFor2
+- [ ] Real-time ADP updates every 2-4 hours
+- [ ] Accurate value calculations using SFB15 data
+- [ ] Source switching working in live dashboard
+- [ ] Improved value identification vs industry ADP
+
+### Risk Mitigation:
+- **Scraping Failures**: Implement robust retry logic and fallback to cached data
+- **Rate Limiting**: Respect GoingFor2 server with appropriate delays
+- **Data Quality**: Validate scraped data against expected ranges
+- **Source Availability**: Always maintain 2+ backup ADP sources
+
+---
+
 ## 🚀 **IMMEDIATE PRIORITIES** (Next 8-12 hours)
 
 ### **PHASE 10A: Architecture Restructure** ⚡ PRIORITY 1 (3-4 hours)

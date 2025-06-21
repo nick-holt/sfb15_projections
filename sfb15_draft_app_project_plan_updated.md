@@ -1,5 +1,59 @@
 # SFB15 Fantasy Football Draft Dashboard - Updated Implementation Plan
 
+**Status**: ✅ Phases 1-9 Complete | 📋 Phase 10+ Planning | 🚨 P0 CRITICAL ADDED
+
+---
+
+## 🚨 CRITICAL P0: SFB15-Specific ADP Integration (IMMEDIATE)
+
+**Why This is Priority Zero**:
+The current dashboard uses industry ADP (Sleeper/FantasyPros) which is optimized for standard fantasy leagues. SFB15 has unique scoring rules that dramatically change player values compared to standard leagues. Without SFB15-specific ADP data from actual tournament mocks, our value calculations are fundamentally flawed for tournament play.
+
+**The Problem**:
+- Our "value" calculations compare projections to irrelevant industry ADP
+- Players undervalued in standard leagues may be properly valued in SFB15
+- Draft strategy based on wrong ADP leads to poor tournament results
+- We're building a hobby tool instead of a competitive advantage
+
+**The Solution**:
+[GoingFor2.com runs actual SFB15 mock drafts](https://goingfor2.com/sfb15adp/) with 299+ players, providing the ONLY true SFB15 ADP data available. This is the difference between guessing and knowing actual tournament values.
+
+### Implementation Requirements:
+
+#### P0.1: SFB15 ADP Scraper (1.5 hours)
+- Build robust scraper for GoingFor2 SFB15 ADP table
+- Handle 299+ player table with real tournament ADP values  
+- Implement retry logic and error handling for scraping failures
+- Validate data quality against expected player counts and ADP ranges
+
+#### P0.2: Multi-Source ADP Management (1 hour)
+- Enhance ADPManager to blend multiple ADP sources with configurable weights
+- Default: SFB15 (70%), Sleeper (20%), FantasyPros (10%)
+- Enable real-time source switching for different league contexts
+- Add source comparison analytics for value arbitrage opportunities
+
+#### P0.3: Dashboard ADP Controls (0.5 hours)
+- Add UI controls for ADP source selection and weighting
+- Display source health indicators and last update times
+- Enable advanced blending with custom weight sliders
+- Show ADP source comparison for transparency
+
+#### P0.4: SFB15-Calibrated Value Metrics (1 hour)
+- Recalibrate all value calculations using SFB15 ADP as primary source
+- Adjust sleeper/bust identification thresholds for tournament context
+- Create SFB15-specific market efficiency metrics
+- Generate tournament-optimized draft strategy recommendations
+
+**Success Criteria**:
+- [ ] Successfully scraping 290+ players from GoingFor2 every 2-4 hours
+- [ ] Value calculations using true SFB15 ADP instead of industry ADP
+- [ ] Real-time ADP source switching working in dashboard
+- [ ] Improved value identification accuracy for tournament play
+
+**Timeline**: Must complete before any Phase 10+ work begins
+
+---
+
 ## 🎯 Project Vision: Two-Core Function Architecture
 
 Build a streamlined fantasy football dashboard optimized for **two primary use cases**:
