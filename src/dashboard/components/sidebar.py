@@ -22,7 +22,7 @@ def render_sidebar(adp_manager=None) -> Dict:
     st.sidebar.subheader("📊 View Selection")
     view_mode = st.sidebar.selectbox(
         "Dashboard View",
-        ["Player Rankings", "Tier Analysis", "Value Explorer", "VORP Explorer", "Draft Assistant"],
+        ["Player Rankings", "Tier Analysis", "Value Explorer", "VORP Explorer", "Draft Assistant", "Live Draft Tracker"],
         help="Choose the main dashboard view"
     )
     
@@ -240,11 +240,8 @@ def render_sidebar(adp_manager=None) -> Dict:
     # Action buttons
     st.sidebar.subheader("🚀 Actions")
     if st.sidebar.button("🔄 Refresh Data", key="refresh_data_btn", help="Reload projection data"):
-        # Use st.rerun() for newer Streamlit versions, fallback to experimental_rerun
-        try:
-            st.rerun()
-        except AttributeError:
-            st.experimental_rerun()
+        # Use experimental_rerun for Streamlit 1.12.0
+        st.experimental_rerun()
     
     if st.sidebar.button("📊 Export Rankings", key="export_rankings_btn", help="Export current rankings to CSV"):
         st.sidebar.success("Export functionality coming soon!")

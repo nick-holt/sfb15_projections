@@ -37,28 +37,24 @@ def render_adp_view(projections: pd.DataFrame, adp_data: pd.DataFrame,
     # ADP Analysis Header
     st.header("📊 ADP Analysis & Market Intelligence")
     
-    # Create tabs for different ADP views
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "🎯 Value Opportunities", 
-        "💎 Sleepers & Busts", 
-        "📈 Market Trends", 
-        "🎲 Draft Strategy",
-        "🚨 Live Alerts"
-    ])
+    # Create tabs for different ADP views - using selectbox for Streamlit 1.12.0 compatibility
+    adp_tab_names = ["🎯 Value Opportunities", "💎 Sleepers & Busts", "📈 Market Trends", 
+                     "🎲 Draft Strategy", "🚨 Live Alerts"]
+    selected_adp_tab = st.selectbox("Select ADP Analysis:", adp_tab_names, key="adp_tab_selector")
     
-    with tab1:
+    if selected_adp_tab == "🎯 Value Opportunities":
         render_value_opportunities(value_df, config)
     
-    with tab2:
+    elif selected_adp_tab == "💎 Sleepers & Busts":
         render_sleepers_and_busts(value_df, adp_analyzer, config)
     
-    with tab3:
+    elif selected_adp_tab == "📈 Market Trends":
         render_market_trends(value_df, adp_analyzer, config)
     
-    with tab4:
+    elif selected_adp_tab == "🎲 Draft Strategy":
         render_draft_strategy(value_df, adp_analyzer, config)
     
-    with tab5:
+    elif selected_adp_tab == "🚨 Live Alerts":
         render_live_alerts(value_df, adp_analyzer, config)
 
 def render_value_opportunities(value_df: pd.DataFrame, config: Dict[str, Any]) -> None:
@@ -523,4 +519,4 @@ def render_live_alerts(value_df: pd.DataFrame, adp_analyzer, config: Dict[str, A
     
     # Auto-refresh option
     if st.checkbox("Auto-refresh alerts (every 30 seconds)"):
-        st.rerun() 
+        st.experimental_rerun() 

@@ -134,14 +134,15 @@ def main():
         with st.spinner("Loading ADP data..."):
             adp_data = adp_manager.get_blended_adp()
     
-    # Main dashboard tabs
-    tab1, tab2 = st.tabs(["🏈 Player Analysis", "📈 ADP Analysis"])
+    # Main dashboard tabs - using selectbox for Streamlit 1.12.0 compatibility
+    main_tab_names = ["🏈 Player Analysis", "📈 ADP Analysis"]
+    selected_main_tab = st.selectbox("Select Analysis View:", main_tab_names, key="main_tab_selector")
     
-    with tab1:
+    if selected_main_tab == "🏈 Player Analysis":
         # Main dashboard view - pass ADP data for enhanced player analysis
         render_main_view(projections, value_calc, tier_manager, adp_data, sidebar_config)
     
-    with tab2:
+    elif selected_main_tab == "📈 ADP Analysis":
         # ADP analysis view
         if adp_data is not None and not adp_data.empty:
             render_adp_view(projections, adp_data, adp_analyzer, sidebar_config)

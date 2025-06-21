@@ -17,6 +17,7 @@ except ImportError:
 
 from ..utils.styling import format_player_card_html, get_tier_badge_html, get_position_badge_html
 from ...analytics.vorp_calculator import VORPCalculator
+from .live_draft_view import LiveDraftView
 
 def render_main_view(projections: pd.DataFrame, value_calc, tier_manager, adp_data: pd.DataFrame, config: Dict[str, Any]):
     """
@@ -119,6 +120,8 @@ def render_main_view(projections: pd.DataFrame, value_calc, tier_manager, adp_da
         render_vorp_explorer(filtered_projections, vorp_calc, config)
     elif view_mode == "Draft Assistant":
         render_draft_assistant(filtered_projections, value_calc, tier_manager, config)
+    elif view_mode == "Live Draft Tracker":
+        render_live_draft_tracker(enhanced_projections, config)
     else:
         # Fallback to player rankings
         render_player_rankings(filtered_projections, config, vorp_calc)
@@ -648,4 +651,9 @@ def render_draft_assistant(projections: pd.DataFrame, value_calc, tier_manager, 
         with col4:
             if st.button("Draft", key=f"draft_{player['player_name']}"):
                 st.success(f"Drafted {player['player_name']}!")
-                # In a real implementation, this would update the roster 
+                # In a real implementation, this would update the roster
+
+def render_live_draft_tracker(projections: pd.DataFrame, config: Dict[str, Any]):
+    """Render the live draft tracker view"""
+    live_draft_view = LiveDraftView(projections_data=projections)
+    live_draft_view.render() 

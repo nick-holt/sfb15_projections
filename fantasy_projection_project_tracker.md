@@ -89,6 +89,121 @@ Legend: ☐ = Not started, ◐ = In progress, ☑ = Complete
 - Optimize scaling parameters for maximum realism
 - Full historical dataset retraining for production deployment
 
+### **P0-1 — LIVE DRAFT STATE TRACKING** ⏳ **IN PROGRESS**
+**Status**: 🎯 **PRIORITY** - Real-time draft integration for dynamic recommendations
+
+**OBJECTIVE**: Build comprehensive live draft state tracking system that monitors draft progress in real-time and maintains current roster compositions for all teams in the league.
+
+**PHASE 1A: Sleeper API Integration**
+- [ ] **Sleeper Draft API Research**: Map Sleeper draft endpoints and authentication requirements
+- [ ] **Draft ID Discovery**: Build user interface for finding/entering Sleeper draft_id or league_id
+- [ ] **Real-time Draft Monitoring**: Implement polling system to track draft picks in real-time
+- [ ] **Draft State Parser**: Parse Sleeper draft responses into standardized draft state format
+- [ ] **Error Handling**: Robust handling of API failures, rate limits, and connection issues
+
+**PHASE 1B: Draft State Data Model**
+- [ ] **Draft State Schema**: Design comprehensive data structure for live draft tracking
+  - Current pick number and draft position
+  - All completed picks with player, team, round, pick number
+  - Remaining available players by position
+  - Each team's current roster composition
+  - Draft settings (league size, roster requirements, scoring)
+- [ ] **State Persistence**: Save/load draft state for session recovery
+- [ ] **Multi-Draft Support**: Handle multiple concurrent draft sessions
+
+**PHASE 1C: Dashboard Integration**
+- [ ] **Live Draft View**: New dashboard section for active draft monitoring
+- [ ] **Draft Board Display**: Visual draft board showing all picks and remaining slots
+- [ ] **Team Roster Tracking**: Real-time display of each team's positional needs
+- [ ] **Pick Timer Integration**: Show draft clock and upcoming pick notifications
+- [ ] **Your Team Focus**: Highlight user's team with detailed roster analysis
+
+**PHASE 1D: Data Synchronization**
+- [ ] **Player Matching**: Map Sleeper player IDs to internal projection system
+- [ ] **Real-time Updates**: Automatic refresh when new picks are detected
+- [ ] **Conflict Resolution**: Handle discrepancies between draft state and projections
+- [ ] **Offline Mode**: Graceful degradation when API is unavailable
+
+**TECHNICAL REQUIREMENTS**:
+- Sleeper API integration with proper authentication
+- Real-time polling system (5-10 second intervals during active drafts)
+- Robust error handling and retry logic
+- Clean separation between draft state and projection data
+- Efficient data structures for fast lookups and updates
+
+**ACCEPTANCE CRITERIA**:
+- Successfully track live Sleeper drafts from draft_id
+- Real-time updates within 10 seconds of actual picks
+- Handle 12-16 team leagues with standard and superflex formats
+- Maintain accurate roster compositions for all teams
+- Recover gracefully from connection interruptions
+
+### **P0-2 — DYNAMIC VORP IMPLEMENTATION** ⏳ **IN PROGRESS**  
+**Status**: 🎯 **PRIORITY** - Intelligent draft recommendations powered by live draft context
+
+**OBJECTIVE**: Transform static VORP into a dynamic, context-aware draft assistant that adapts recommendations based on real-time draft state, roster needs, and market conditions.
+
+**PHASE 2A: Dynamic Replacement Level Calculation**
+- [ ] **Live Replacement Tracking**: Recalculate replacement levels as players are drafted
+  - QB13 → QB15 → QB18 as quarterbacks are selected
+  - RB25 → RB30 → RB35 as running backs are selected
+  - Dynamic adjustment based on actual draft depletion
+- [ ] **Position Scarcity Modeling**: Real-time scarcity multipliers based on remaining talent
+- [ ] **League-Specific Adjustments**: Customize replacement levels for league size and format
+- [ ] **Tier Break Detection**: Identify when draft crosses major talent tiers
+
+**PHASE 2B: Roster Construction Context**
+- [ ] **Team Need Analysis**: Calculate positional needs based on current roster
+  - Zero-RB penalty: Massive VORP boost if no RBs drafted
+  - Positional balance: Diminishing returns for 4th WR vs 1st RB
+  - Starter vs depth: Different VORP calculations for starters vs bench
+- [ ] **Draft Position Awareness**: Factor in snake draft position and remaining picks
+  - Turn position: Premium for scarce positions before long wait
+  - Late draft: Higher value for depth vs reaching for starters
+- [ ] **Opportunity Cost Modeling**: Compare current pick value vs expected next-round value
+
+**PHASE 2C: Market Efficiency Detection**
+- [ ] **Live ADP Deviation**: Compare real draft vs expected ADP patterns
+- [ ] **Panic Draft Detection**: Identify when league reaches for positions early
+- [ ] **Value Opportunity Alerts**: Flag when high-VORP players fall below market value
+- [ ] **Positional Run Prediction**: Warn when position runs are likely to start
+
+**PHASE 2D: Intelligent Draft Recommendations**
+- [ ] **Dynamic Best Available**: Combine VORP + positional need + market context
+- [ ] **Reach vs Wait Analysis**: Quantify cost of reaching now vs waiting
+- [ ] **Trade Value Integration**: Suggest trade opportunities based on roster imbalances
+- [ ] **Round-Specific Strategy**: Adapt recommendations by draft phase
+  - Early rounds: Elite VORP regardless of position
+  - Middle rounds: Balance VORP with positional need
+  - Late rounds: Target positive VORP depth plays
+
+**PHASE 2E: Advanced Analytics Dashboard**
+- [ ] **Live VORP Leaderboard**: Real-time rankings with dynamic context
+- [ ] **Positional Scarcity Meter**: Visual indicators of remaining talent by position
+- [ ] **Your Team Analysis**: Deep dive into roster construction and remaining needs
+- [ ] **Draft Strategy Insights**: Round-by-round recommendations with reasoning
+- [ ] **Value Opportunity Tracker**: Running list of players falling below expected draft position
+
+**TECHNICAL REQUIREMENTS**:
+- Real-time VORP recalculation on every draft pick
+- Efficient algorithms for replacement level updates
+- Integration with live draft state tracking (P0-1)
+- Advanced roster analysis and need detection
+- Performance optimization for sub-second response times
+
+**ACCEPTANCE CRITERIA**:
+- VORP updates within 2 seconds of new draft picks
+- Accurate replacement level adjustments throughout draft
+- Intelligent positional need detection (90%+ accuracy)
+- Meaningful draft recommendations that improve team construction
+- Clear explanations for why specific players are recommended
+
+**INTEGRATION POINTS**:
+- Requires completion of P0-1 (Live Draft State Tracking)
+- Builds on existing VORP calculator foundation
+- Integrates with current ADP analysis system
+- Enhances existing dashboard with live draft features
+
 ### Phase 1 — Data Ingestion & Cleaning
 - [ ] **Set up repo & env** (`environment.yml`, Dockerfile)
 - [ ] Convert CSV/XLSX to Parquet (`season_stats.parquet`, `weekly_stats.parquet`)
