@@ -76,68 +76,94 @@ def apply_filters(projections: pd.DataFrame, config: Dict[str, Any]) -> pd.DataF
         df = df[df['age'] <= config['max_age']]
         print(f"After age filter: {len(df)} players")
     
-    # Confidence filter (if confidence column exists)
+    # Confidence filter (if confidence column exists and has valid data)
     if 'confidence' in df.columns:
         confidence_levels = config.get('confidence_levels', ['High', 'Medium', 'Low'])
         
-        # Only apply filter if confidence_levels is not empty
-        if confidence_levels:
-            df = df[df['confidence'].isin(confidence_levels)]
+        # Check if confidence column has valid data (not all NaN)
+        valid_confidence = df['confidence'].notna().any()
+        
+        if confidence_levels and valid_confidence:
+            # Check if confidence is numeric or categorical
+            first_valid_confidence = df['confidence'].dropna().iloc[0] if len(df['confidence'].dropna()) > 0 else None
+            
+            if isinstance(first_valid_confidence, (int, float)):
+                # Numeric confidence scores - convert to categorical
+                print("Converting numeric confidence to categories...")
+                
+                def categorize_confidence(score):
+                    if pd.isna(score):
+                        return 'Medium'
+                    elif score >= 80:
+                        return 'High'
+                    elif score >= 50:
+                        return 'Medium'
+                    else:
+                        return 'Low'
+                
+                df['confidence_category'] = df['confidence'].apply(categorize_confidence)
+                df = df[df['confidence_category'].isin(confidence_levels)]
+                print(f"Confidence distribution: {df['confidence_category'].value_counts().to_dict()}")
+                
+            else:
+                # Categorical confidence - use as is
+                df = df[df['confidence'].isin(confidence_levels)]
+                print(f"Confidence distribution: {df['confidence'].value_counts().to_dict()}")
+        elif not valid_confidence:
+            print("Warning: Confidence column contains only NaN values, skipping confidence filter")
+        
         print(f"After confidence filter: {len(df)} players")
     
     print(f"Final filtered result: {len(df)} players")
     return df
 
 def render_player_rankings(projections: pd.DataFrame, config: Dict[str, Any]):
-    """Render the player rankings view"""
-    st.subheader("🏆 Player Rankings")
+    """
+    Render player rankings with position-specific views
+    """
+    st.subheader("🏈 Player Rankings")
     
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Players", len(projections))
-    with col2:
-        st.metric("Elite Tier (1)", len(projections[projections['tier'] == 1]))
-    with col3:
-        st.metric("Strong Tier (2)", len(projections[projections['tier'] == 2]))
-    with col4:
-        if len(projections) > 0:
-            st.metric("Avg Points", f"{projections['projected_points'].mean():.1f}")
-    
-    # Position tabs (now supported in Streamlit 1.12.0+)
-    tab_qb, tab_rb, tab_wr, tab_te, tab_all = st.tabs(["🎯 QB", "🏃 RB", "🏃‍♂️ WR", "🎯 TE", "📊 All"])
-    
-    positions = ['QB', 'RB', 'WR', 'TE']
-    tabs = [tab_qb, tab_rb, tab_wr, tab_te]
-    
-    # Position-specific views
-    for pos, tab in zip(positions, tabs):
-        with tab:
-            pos_players = projections[projections['position'] == pos].head(config['players_per_page'])
-            render_position_rankings(pos_players, config, position=pos)
-    
-    # All players view
-    with tab_all:
-        render_all_players_table(projections.head(config['players_per_page']), config)
-
-def render_position_rankings(pos_players: pd.DataFrame, config: Dict[str, Any], position: str = "All"):
-    """Render rankings for a specific position"""
-    if len(pos_players) == 0:
-        st.info("No players found matching the current filters.")
-        return
-    
-    # Display format options
-    display_format = st.radio(
-        "Display Format",
-        ["Cards", "Table"],
-        horizontal=True,
-        key=f"display_format_{position}"
+    # Position filter for older Streamlit versions (replace tabs)
+    position_options = ["All", "QB", "RB", "WR", "TE"]
+    selected_position = st.selectbox(
+        "Select Position",
+        options=position_options,
+        index=0,
+        key="position_rankings_selector"
     )
     
-    if display_format == "Cards":
-        render_player_cards(pos_players, config)
+    # Filter by position if not "All"
+    if selected_position != "All":
+        pos_projections = projections[projections['position'] == selected_position].copy()
+        st.subheader(f"{selected_position} Rankings")
+        render_position_rankings(pos_projections, config)
     else:
-        render_player_table(pos_players, config)
+        st.subheader("All Players")
+        render_all_players_table(projections.head(config['players_per_page']), config)
+
+def render_position_rankings(projections: pd.DataFrame, config: Dict[str, Any]):
+    """
+    Render rankings for a specific position
+    """
+    if projections.empty:
+        st.info("No players found for this position.")
+        return
+    
+    # Display format toggle
+    # Create unique key based on position and timestamp to avoid duplicates
+    import time
+    unique_key = f"display_format_{projections['position'].iloc[0] if not projections.empty else 'unknown'}_{int(time.time() * 1000) % 10000}"
+    display_format = st.radio(
+        "Display Format",
+        ["Table", "Cards"],
+        index=0,
+        key=unique_key
+    )
+    
+    if display_format == "Table":
+        render_player_table(projections.head(config['players_per_page']), config)
+    else:
+        render_player_cards(projections.head(config['players_per_page']), config)
 
 def render_player_cards(players: pd.DataFrame, config: Dict[str, Any]):
     """Render players as cards"""
@@ -146,38 +172,37 @@ def render_player_cards(players: pd.DataFrame, config: Dict[str, Any]):
         card_html = format_player_card_html(player_dict)
         st.markdown(card_html, unsafe_allow_html=True)
 
-def render_player_table(players: pd.DataFrame, config: Dict[str, Any]):
-    """Render players as a data table"""
-    # Select columns to display - only include columns that exist
-    base_columns = ['player_name', 'position', 'team', 'projected_points']
-    optional_base_columns = ['tier', 'value_tier']
+def render_player_table(projections: pd.DataFrame, config: Dict[str, Any]):
+    """
+    Render player data as a table
+    """
+    # Select columns for display
+    display_columns = [
+        'player_name', 'position', 'team', 'projected_points', 
+        'tier_label', 'draft_value', 'overall_rank'
+    ]
     
-    # Add optional base columns if they exist
-    for col in optional_base_columns:
-        if col in players.columns:
-            base_columns.append(col)
+    # Check which columns exist
+    available_columns = [col for col in display_columns if col in projections.columns]
     
-    if config['show_details']:
-        detail_columns = ['age', 'confidence', 'vbd_score', 'draft_value']
-        detail_columns = [col for col in detail_columns if col in players.columns]
-        display_columns = base_columns + detail_columns
+    if available_columns:
+        display_df = projections[available_columns].copy()
+        
+        # Round numeric columns
+        numeric_columns = display_df.select_dtypes(include=['float64', 'int64']).columns
+        for col in numeric_columns:
+            if col != 'overall_rank':  # Don't round ranks
+                display_df[col] = display_df[col].round(1)
+        
+        # Remove use_container_width for compatibility with Streamlit 1.12.0
+        st.dataframe(display_df)
     else:
-        display_columns = base_columns
-    
-    # Format the display table
-    display_df = players[display_columns].copy()
-    display_df['projected_points'] = display_df['projected_points'].round(1)
-    
-    if 'vbd_score' in display_df.columns:
-        display_df['vbd_score'] = display_df['vbd_score'].round(1)
-    if 'draft_value' in display_df.columns:
-        display_df['draft_value'] = display_df['draft_value'].round(1)
-    
-    st.dataframe(display_df)
+        st.error("No valid columns found for display")
 
 def render_all_players_table(projections: pd.DataFrame, config: Dict[str, Any]):
-    """Render all players in a comprehensive table"""
-    st.write(f"**Top {len(projections)} Players Overall**")
+    """
+    Render all players table
+    """
     render_player_table(projections, config)
 
 def render_tier_analysis(projections: pd.DataFrame, tier_manager, config: Dict[str, Any]):

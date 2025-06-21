@@ -139,23 +139,27 @@ def render_sidebar() -> Dict:
     
     # Action buttons
     st.sidebar.subheader("🚀 Actions")
-    if st.sidebar.button("🔄 Refresh Data", help="Reload projection data"):
-        st.experimental_rerun()
+    if st.sidebar.button("🔄 Refresh Data", key="refresh_data_btn", help="Reload projection data"):
+        # Use st.rerun() for newer Streamlit versions, fallback to experimental_rerun
+        try:
+            st.rerun()
+        except AttributeError:
+            st.experimental_rerun()
     
-    if st.sidebar.button("📊 Export Rankings", help="Export current rankings to CSV"):
+    if st.sidebar.button("📊 Export Rankings", key="export_rankings_btn", help="Export current rankings to CSV"):
         st.sidebar.success("Export functionality coming soon!")
     
     # Draft assistance
     with st.sidebar.expander("🎯 Draft Assistant"):
         st.write("**My Team:**")
-        my_qb = st.text_input("QB", placeholder="e.g., Josh Allen")
-        my_rb1 = st.text_input("RB1", placeholder="e.g., Saquon Barkley")
-        my_rb2 = st.text_input("RB2", placeholder="e.g., Bijan Robinson")
-        my_wr1 = st.text_input("WR1", placeholder="e.g., Ja'Marr Chase")
-        my_wr2 = st.text_input("WR2", placeholder="e.g., Amon-Ra St. Brown")
-        my_wr3 = st.text_input("WR3", placeholder="e.g., Puka Nacua")
-        my_te = st.text_input("TE", placeholder="e.g., Travis Kelce")
-        my_flex = st.text_input("FLEX", placeholder="e.g., DeVonta Smith")
+        my_qb = st.text_input("QB", placeholder="e.g., Josh Allen", key="draft_qb_input")
+        my_rb1 = st.text_input("RB1", placeholder="e.g., Saquon Barkley", key="draft_rb1_input")
+        my_rb2 = st.text_input("RB2", placeholder="e.g., Bijan Robinson", key="draft_rb2_input")
+        my_wr1 = st.text_input("WR1", placeholder="e.g., Ja'Marr Chase", key="draft_wr1_input")
+        my_wr2 = st.text_input("WR2", placeholder="e.g., Amon-Ra St. Brown", key="draft_wr2_input")
+        my_wr3 = st.text_input("WR3", placeholder="e.g., Puka Nacua", key="draft_wr3_input")
+        my_te = st.text_input("TE", placeholder="e.g., Travis Kelce", key="draft_te_input")
+        my_flex = st.text_input("FLEX", placeholder="e.g., DeVonta Smith", key="draft_flex_input")
         
         # Collect drafted players
         my_roster = [

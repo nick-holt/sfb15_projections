@@ -29,10 +29,13 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 # Try to import dashboard components with error handling
 try:
     from src.data.projections import ProjectionManager
+    from src.data.adp_manager import ADPManager
     from src.analytics.value_calculator import ValueCalculator
     from src.analytics.tier_manager import TierManager
+    from src.analytics.adp_analyzer import ADPAnalyzer
     from src.dashboard.components.sidebar import render_sidebar
     from src.dashboard.components.main_view import render_main_view
+    from src.dashboard.components.adp_view import render_adp_view
     from src.dashboard.utils.styling import apply_custom_css
     COMPONENTS_AVAILABLE = True
 except ImportError as e:
@@ -63,6 +66,8 @@ def load_data():
         # Initialize analytics engines
         value_calc = ValueCalculator()
         tier_manager = TierManager()
+        adp_manager = ADPManager()
+        adp_analyzer = ADPAnalyzer()
         
         # Calculate VBD and tiers
         print("Calculating VBD scores...")
@@ -74,14 +79,19 @@ def load_data():
         print(f"Final columns: {projections_with_tiers.columns.tolist()}")
         print(f"Final shape: {projections_with_tiers.shape}")
         
-        return projections_with_tiers, value_calc, tier_manager
+        # Load ADP data
+        print("Loading ADP data...")
+        adp_data = adp_manager.update_adp_data()
+        print(f"Loaded ADP data for {len(adp_data)} players")
+        
+        return projections_with_tiers, value_calc, tier_manager, adp_data, adp_analyzer
         
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
         print(f"Exception details: {str(e)}")
         import traceback
         print(traceback.format_exc())
-        return None, None, None
+        return None, None, None, None, None
 
 def main():
     """Main application entry point"""
@@ -100,7 +110,7 @@ def main():
     
     # Load data
     with st.spinner("Loading enhanced projections and analytics..."):
-        projections, value_calc, tier_manager = load_data()
+        projections, value_calc, tier_manager, adp_data, adp_analyzer = load_data()
     
     if projections is None:
         st.error("Failed to load projection data. Please check your data files.")
@@ -109,8 +119,20 @@ def main():
     # Sidebar configuration
     sidebar_config = render_sidebar()
     
-    # Main dashboard view
-    render_main_view(projections, value_calc, tier_manager, sidebar_config)
+    # Main dashboard tabs
+    tab1, tab2 = st.tabs(["🏈 Player Analysis", "📈 ADP Analysis"])
+    
+    with tab1:
+        # Main dashboard view
+        render_main_view(projections, value_calc, tier_manager, sidebar_config)
+    
+    with tab2:
+        # ADP analysis view
+        if adp_data is not None and not adp_data.empty:
+            render_adp_view(projections, adp_data, adp_analyzer, sidebar_config)
+        else:
+            st.warning("⚠️ ADP data not available. Please check your data sources.")
+            st.info("ADP data will be automatically fetched from multiple sources including Sleeper and FantasyPros.")
     
     # Footer
     st.markdown("---")
