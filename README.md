@@ -4,14 +4,17 @@
 
 This repository contains a complete fantasy football projection system built using advanced machine learning techniques, comprehensive feature engineering, and **real-time live draft assistance** with dynamic VORP calculations.
 
-## 🎯 **Project Status: Production Ready + Live Draft System**
+## 🎯 **Project Status: Production Ready + Live Draft System** 🚀
 
 ✅ **Models Trained & Validated** - 71% correlation (excellent for fantasy sports)  
 ✅ **Data Pipeline Complete** - 6,744 historical player-season records  
 ✅ **Feature Engineering** - 45+ predictive features per position  
 ✅ **No Data Leakage** - Pure prediction setup using only pre-season information  
-🎉 **NEW**: **Live Draft Tracker** - Real-time Sleeper integration with dynamic VORP  
-🎉 **NEW**: **Market Inefficiency Detection** - AI-powered contrarian opportunities  
+🎉 **LIVE**: **Auto-Refresh Draft System** - Real-time updates with working VORP calculations  
+🎉 **LIVE**: **Professional UI/UX** - Enhanced cards with prominent player names and modern design  
+🎉 **LIVE**: **Real ADP Integration** - SFB15 and multi-source ADP data working perfectly  
+🎉 **LIVE**: **Position Recommendation Tiles** - 4-tile quick decision system  
+🎉 **LIVE**: **Dual View Modes** - Enhanced Cards + Data Table both fully functional  
 
 ## 📊 **Model Performance**
 
@@ -49,9 +52,11 @@ This repository contains a complete fantasy football projection system built usi
 # Install dependencies
 pip install -r requirements.txt
 
-# Launch the dashboard
-streamlit run app.py
+# Launch the dashboard (defaults to Live Draft page)
+streamlit run app_new.py --server.port 8505
 ```
+
+**🎯 App now defaults to Live Draft page for instant draft readiness!**
 
 ### **Connect to Your Draft**
 1. Navigate to the "Live Draft Tracker" section

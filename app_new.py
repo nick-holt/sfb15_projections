@@ -8,6 +8,8 @@ import pandas as pd
 import numpy as np
 import sys
 from pathlib import Path
+import time
+from datetime import datetime
 
 # Add src to path for imports
 current_dir = Path(__file__).parent
@@ -78,10 +80,30 @@ def load_core_data():
         adp_manager = ADPManager()
         adp_data = adp_manager.get_blended_adp()
         
-        # Initialize dynamic VORP calculator
-        vorp_calc = DynamicVORPCalculator(projections_final)
+        # CRITICAL FIX: Merge ADP data with projections DataFrame
+        if adp_data is not None and not adp_data.empty:
+            # Merge ADP data with projections using player names
+            adp_for_merge = adp_data[['name', 'consensus_adp', 'overall_rank']].copy()
+            adp_for_merge = adp_for_merge.rename(columns={
+                'name': 'player_name',
+                'consensus_adp': 'sfb15_adp',
+                'overall_rank': 'sfb15_rank'
+            })
+            
+            # Merge ADP data
+            projections_final = projections_final.merge(
+                adp_for_merge,
+                on='player_name',
+                how='left'
+            )
         
-        return projections_final, adp_data, vorp_calc
+        # FIXED: Initialize VORP calculator with correct parameters and actually calculate VORP
+        vorp_calc = DynamicVORPCalculator(num_teams=12)  # Pass num_teams, not DataFrame
+        
+        # CRITICAL FIX: Actually calculate VORP scores and add them to the DataFrame
+        projections_with_vorp = vorp_calc.calculate_dynamic_vorp(projections_final, draft_state=None)
+        
+        return projections_with_vorp, adp_data, vorp_calc
         
     except Exception as e:
         # Don't use st.error in cached function - let caller handle the error
@@ -136,7 +158,7 @@ def render_navigation():
     selected_nav = st.selectbox(
         "Choose Your Tool:",
         nav_options,
-        index=0,
+        index=1,  # Default to Live Draft for draft day readiness
         key="main_navigation"
     )
     
@@ -254,11 +276,17 @@ def render_draft_connection():
                                 draft_manager = DraftManager(draft_id, sleeper_client)
                                 draft_state = draft_manager.initialize_draft()
                                 
+                                # CRITICAL FIX: Set UI refresh callback for auto-refresh
+                                draft_manager.set_ui_refresh_callback(lambda: st.experimental_rerun())
+                                
+                                # CRITICAL FIX: Start monitoring for live updates
+                                draft_manager.start_monitoring(poll_interval=5)
+                                
                                 st.session_state.connected_draft_id = draft_id
                                 st.session_state.draft_manager = draft_manager
                                 st.session_state.draft_state = draft_state
                                 
-                                st.success(f"✅ Connected to draft {draft_id}")
+                                st.success(f"✅ Connected to draft {draft_id} with live monitoring")
                                 league_name = draft_state.settings.league_name
                                 st.info(f"League: {league_name}")
                                 st.info(f"Status: {draft_state.status}")
@@ -306,25 +334,24 @@ def render_draft_connection():
                                 draft_id = draft_info['draft_id']
                                 league_name = draft_info.get('league_name', 'Unknown League')
                                 
-                                # Initialize the draft connection
                                 from src.draft.draft_manager import DraftManager
                                 draft_manager = DraftManager(draft_id, sleeper_client)
                                 draft_state = draft_manager.initialize_draft()
+                                
+                                # CRITICAL FIX: Set UI refresh callback for auto-refresh
+                                draft_manager.set_ui_refresh_callback(lambda: st.experimental_rerun())
+                                
+                                # CRITICAL FIX: Start monitoring for live updates
+                                draft_manager.start_monitoring(poll_interval=5)
                                 
                                 st.session_state.connected_draft_id = draft_id
                                 st.session_state.draft_manager = draft_manager
                                 st.session_state.draft_state = draft_state
                                 
-                                st.success(f"✅ Found and connected to draft for league {league_id}")
-                                st.info(f"League: {league_name}")
-                                st.info(f"Draft ID: {draft_id}")
+                                st.success(f"✅ Connected to draft for {league_name} with live monitoring")
                                 st.experimental_rerun()
                             else:
-                                st.error("No draft found for this league ID")
-                        except SleeperAPIError as e:
-                            st.error(f"Sleeper API Error: {str(e)}")
-                        except ImportError:
-                            st.error("Draft manager not available. Please check your installation.")
+                                st.error("No active draft found for this league")
                         except Exception as e:
                             st.error(f"Error finding league draft: {str(e)}")
                 else:
@@ -999,11 +1026,459 @@ def render_vorp_analysis(projections_df, vorp_calc):
         st.error("VORP data not available")
 
 
+def render_visual_draft_board(draft_manager, projections_df):
+    """
+    P0-2: Visual Draft Board Interface
+    Create Sleeper-style visual draft board with position-colored tiles
+    """
+    if not draft_manager or not draft_manager.draft_state:
+        st.error("Draft manager not available")
+        return
+    
+    # CSS for position-colored tiles
+    st.markdown("""
+    <style>
+    .draft-board {
+        background: #f8fafc;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    .round-header {
+        background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%);
+        color: white;
+        padding: 8px 15px;
+        border-radius: 8px;
+        font-weight: 600;
+        text-align: center;
+        margin-bottom: 10px;
+    }
+    .pick-tile {
+        border-radius: 8px;
+        padding: 10px;
+        margin: 2px;
+        min-height: 80px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        text-align: center;
+        font-size: 12px;
+        color: white;
+        font-weight: 500;
+        border: 2px solid transparent;
+        transition: all 0.3s ease;
+    }
+    .pick-tile:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .pick-tile.empty {
+        background: #e2e8f0;
+        color: #64748b;
+        border: 2px dashed #cbd5e1;
+    }
+    .pick-tile.QB { background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%); }
+    .pick-tile.RB { background: linear-gradient(135deg, #059669 0%, #10b981 100%); }
+    .pick-tile.WR { background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%); }
+    .pick-tile.TE { background: linear-gradient(135deg, #ea580c 0%, #f97316 100%); }
+    .pick-tile.K { background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%); }
+    .pick-tile.DEF { background: linear-gradient(135deg, #374151 0%, #4b5563 100%); }
+    .pick-tile.DST { background: linear-gradient(135deg, #374151 0%, #4b5563 100%); }
+    .player-name {
+        font-weight: 700;
+        font-size: 13px;
+        margin-bottom: 2px;
+    }
+    .player-info {
+        font-size: 11px;
+        opacity: 0.9;
+    }
+    .pick-number {
+        position: absolute;
+        top: 2px;
+        left: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        opacity: 0.8;
+    }
+    .current-pick {
+        border: 3px solid #fbbf24 !important;
+        animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+        0%, 100% { border-color: #fbbf24; }
+        50% { border-color: #f59e0b; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    draft_state = draft_manager.draft_state
+    settings = draft_state.settings
+    
+    # Get draft board data
+    board = draft_manager.get_draft_board()
+    
+    # Draft board header
+    st.markdown(f"""
+    <div style="text-align: center; margin-bottom: 20px;">
+        <h3>🏈 {settings.league_name} Draft Board</h3>
+        <p style="color: #666;">
+            {len(draft_state.picks)} / {settings.total_teams * settings.total_rounds} picks made • 
+            Round {draft_state.current_round} • 
+            Pick {draft_state.current_pick}
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Show first 5 rounds (or less if fewer rounds exist)
+    max_rounds_to_show = min(5, len(board))
+    
+    if max_rounds_to_show == 0:
+        st.info("🎯 Draft board will appear here once draft picks are made")
+        return
+    
+    for round_idx in range(max_rounds_to_show):
+        round_num = round_idx + 1
+        round_picks = board[round_idx]
+        
+        # Round header
+        st.markdown(f'<div class="round-header">Round {round_num}</div>', unsafe_allow_html=True)
+        
+        # Create columns for each team
+        cols = st.columns(settings.total_teams)
+        
+        for team_idx, pick in enumerate(round_picks):
+            with cols[team_idx]:
+                # Calculate pick number
+                if settings.draft_type == 'snake' and round_num % 2 == 0:
+                    # Even rounds go in reverse order for snake draft
+                    pick_number = (round_num - 1) * settings.total_teams + (settings.total_teams - team_idx)
+                else:
+                    pick_number = (round_num - 1) * settings.total_teams + (team_idx + 1)
+                
+                # Check if this is the current pick
+                is_current_pick = pick_number == draft_state.current_pick
+                current_class = "current-pick" if is_current_pick else ""
+                
+                if pick:
+                    # Player picked - show player tile
+                    position = pick.position or 'UNK'
+                    player_name = pick.player_name or 'Unknown Player'
+                    team = pick.team or 'FA'
+                    
+                    # Get team info for this roster
+                    roster = draft_state.rosters.get(pick.roster_id)
+                    team_name = (roster.team_name or roster.owner_name or f"Team {pick.roster_id}")[:8] if roster else "Team"
+                    
+                    tile_html = f"""
+                    <div class="pick-tile {position} {current_class}" style="position: relative;">
+                        <div class="pick-number">{pick_number}</div>
+                        <div class="player-name">{player_name[:15]}</div>
+                        <div class="player-info">{position} - {team}</div>
+                        <div class="player-info">{team_name}</div>
+                    </div>
+                    """
+                else:
+                    # Empty slot
+                    if is_current_pick:
+                        tile_html = f"""
+                        <div class="pick-tile empty current-pick" style="position: relative;">
+                            <div class="pick-number">{pick_number}</div>
+                            <div style="color: #f59e0b; font-weight: 700;">ON THE CLOCK</div>
+                            <div style="font-size: 10px;">⏱️ Pick #{pick_number}</div>
+                        </div>
+                        """
+                    else:
+                        tile_html = f"""
+                        <div class="pick-tile empty" style="position: relative;">
+                            <div class="pick-number">{pick_number}</div>
+                            <div>Pick #{pick_number}</div>
+                        </div>
+                        """
+                
+                st.markdown(tile_html, unsafe_allow_html=True)
+    
+    # Show more rounds option
+    if len(board) > max_rounds_to_show:
+        if st.button(f"📊 Show All {len(board)} Rounds", key="show_all_rounds"):
+            st.markdown("### 📋 Complete Draft Board")
+            for round_idx in range(len(board)):
+                round_num = round_idx + 1
+                round_picks = board[round_idx]
+                
+                st.markdown(f"**Round {round_num}**")
+                picks_text = []
+                for team_idx, pick in enumerate(round_picks):
+                    if pick:
+                        roster = draft_state.rosters.get(pick.roster_id)
+                        team_name = (roster.owner_name or f"Team {pick.roster_id}") if roster else "Team"
+                        picks_text.append(f"{pick.pick_number}. {pick.player_name} ({pick.position}) - {team_name}")
+                    else:
+                        pick_number = (round_num - 1) * settings.total_teams + (team_idx + 1)
+                        picks_text.append(f"{pick_number}. [Available]")
+                
+                for i in range(0, len(picks_text), 2):
+                    if i + 1 < len(picks_text):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.text(picks_text[i])
+                        with col2:
+                            st.text(picks_text[i + 1])
+                    else:
+                        st.text(picks_text[i])
+
+
+def render_enhanced_sleeper_connection():
+    """Enhanced Sleeper connection interface for Settings"""
+    
+    # Connection status display
+    is_connected = hasattr(st.session_state, 'connected_draft_id') and st.session_state.connected_draft_id
+    
+    if is_connected:
+        st.success(f"🟢 **CONNECTED** to Draft: {st.session_state.connected_draft_id}")
+        if hasattr(st.session_state, 'draft_username'):
+            st.info(f"👤 Username: {st.session_state.draft_username}")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Refresh Connection", key="refresh_connection"):
+                st.experimental_rerun()
+        with col2:
+            if st.button("❌ Disconnect", key="disconnect_draft"):
+                # Clear connection state
+                for key in ['connected_draft_id', 'draft_manager', 'draft_state', 'draft_username']:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.experimental_rerun()
+        
+        st.markdown("---")
+    else:
+        st.warning("🔴 **NOT CONNECTED** - Choose a connection method below")
+    
+    # Connection methods
+    st.markdown("### 🔗 Connection Methods")
+    
+    # Method 1: By Username (Most Common)
+    st.markdown("#### 👤 **Method 1: By Username** (Recommended)")
+    st.markdown("*Find all your drafts using your Sleeper username*")
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        username = st.text_input(
+            "Sleeper Username",
+            placeholder="Enter your Sleeper username",
+            help="This is the username you use to log into Sleeper",
+            key="settings_username"
+        )
+    with col2:
+        season = st.selectbox("Season", ["2025", "2024"], index=0, key="settings_season")
+    
+    if st.button("🔍 Find My Drafts", key="settings_find_drafts"):
+        if username:
+            with st.spinner("🔍 Searching for your drafts..."):
+                try:
+                    from src.draft.draft_manager import DraftDiscovery
+                    from src.draft.sleeper_client import SleeperClient, SleeperAPIError
+                    
+                    # Use the proper DraftDiscovery class
+                    sleeper_client = SleeperClient()
+                    draft_discovery = DraftDiscovery(sleeper_client)
+                    
+                    # Find drafts for the user
+                    drafts = draft_discovery.find_drafts_by_username(username, season)
+                    
+                    if drafts:
+                        st.success(f"✅ Found {len(drafts)} drafts for {username}")
+                        
+                        # Store drafts in session state for selection
+                        st.session_state.found_drafts = drafts
+                        st.session_state.search_username = username
+                        st.experimental_rerun()
+                    else:
+                        st.warning(f"No drafts found for {username} in {season}")
+                        st.info("Make sure your username is correct and you have active drafts")
+                except Exception as e:
+                    st.error(f"Error searching for drafts: {str(e)}")
+                    # Mock fallback for development
+                    st.info("Using mock data for demonstration")
+                    mock_drafts = [
+                        {'draft_id': 'mock_draft_123', 'league_name': 'Mock League 1', 'status': 'pre_draft'},
+                        {'draft_id': 'mock_draft_456', 'league_name': 'Mock League 2', 'status': 'drafting'}
+                    ]
+                    st.session_state.found_drafts = mock_drafts
+                    st.session_state.search_username = username
+                    st.experimental_rerun()
+        else:
+            st.error("Please enter a username")
+    
+    # Display found drafts if any
+    if hasattr(st.session_state, 'found_drafts') and st.session_state.found_drafts:
+        st.markdown("#### 📋 Your Available Drafts")
+        for i, draft in enumerate(st.session_state.found_drafts):
+            draft_name = f"{draft.get('league_name', 'Unknown League')}"
+            draft_status = draft.get('status', 'unknown')
+            draft_id = draft['draft_id']
+            
+            with st.container():
+                col_a, col_b, col_c = st.columns([3, 1, 1])
+                with col_a:
+                    st.write(f"**{draft_name}**")
+                    st.caption(f"ID: {draft_id} • Status: {draft_status}")
+                with col_b:
+                    status_color = "🟢" if draft_status == "drafting" else "🟡" if draft_status == "pre_draft" else "🔴"
+                    st.markdown(f"{status_color} {draft_status}")
+                with col_c:
+                    if st.button("Connect", key=f"settings_connect_draft_{i}"):
+                        try:
+                            from src.draft.draft_manager import DraftManager
+                            from src.draft.sleeper_client import SleeperClient
+                            
+                            sleeper_client = SleeperClient()
+                            draft_manager = DraftManager(draft_id, sleeper_client)
+                            draft_state = draft_manager.initialize_draft()
+                            
+                            st.session_state.connected_draft_id = draft_id
+                            st.session_state.draft_manager = draft_manager
+                            st.session_state.draft_state = draft_state
+                            st.session_state.draft_username = st.session_state.search_username
+                            
+                            # Clear found drafts
+                            if 'found_drafts' in st.session_state:
+                                del st.session_state.found_drafts
+                            
+                            st.success(f"🎯 Connected to {draft_name}")
+                            st.experimental_rerun()
+                        except Exception as connect_error:
+                            st.error(f"Error connecting to draft: {connect_error}")
+    
+    st.markdown("---")
+    
+    # Method 2: Direct Draft ID
+    st.markdown("#### 🎯 **Method 2: Direct Draft ID**")
+    st.markdown("*Connect directly if you have the draft ID*")
+    
+    draft_id = st.text_input(
+        "Draft ID",
+        placeholder="Enter Sleeper draft ID (e.g., 1234567890123456789)",
+        help="You can find this in the Sleeper app URL when viewing the draft",
+        key="settings_draft_id"
+    )
+    
+    if st.button("🔗 Connect to Draft", key="settings_connect_direct"):
+        if draft_id:
+            with st.spinner("🔗 Connecting to draft..."):
+                try:
+                    from src.draft.draft_manager import DraftManager
+                    from src.draft.sleeper_client import SleeperClient
+                    
+                    sleeper_client = SleeperClient()
+                    draft_manager = DraftManager(draft_id, sleeper_client)
+                    draft_state = draft_manager.initialize_draft()
+                    
+                    st.session_state.connected_draft_id = draft_id
+                    st.session_state.draft_manager = draft_manager
+                    st.session_state.draft_state = draft_state
+                    
+                    st.success(f"✅ Connected to draft {draft_id}")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Error connecting to draft: {str(e)}")
+                    st.info("Double-check the draft ID and try again")
+        else:
+            st.error("Please enter a draft ID")
+    
+    st.markdown("---")
+    
+    # Method 3: League ID
+    st.markdown("#### 🏆 **Method 3: By League ID**")
+    st.markdown("*Find the current draft for a specific league*")
+    
+    league_id = st.text_input(
+        "League ID", 
+        placeholder="Enter Sleeper league ID",
+        help="Find this in your league settings or URL",
+        key="settings_league_id"
+    )
+    
+    if st.button("🔍 Find League Draft", key="settings_find_league"):
+        if league_id:
+            with st.spinner("🔍 Finding league draft..."):
+                try:
+                    from src.draft.draft_manager import DraftDiscovery
+                    from src.draft.sleeper_client import SleeperClient
+                    
+                    sleeper_client = SleeperClient()
+                    draft_discovery = DraftDiscovery(sleeper_client)
+                    
+                    draft_info = draft_discovery.get_draft_by_league_id(league_id)
+                    
+                    if draft_info:
+                        draft_id = draft_info['draft_id']
+                        league_name = draft_info.get('league_name', 'Unknown League')
+                        
+                        from src.draft.draft_manager import DraftManager
+                        draft_manager = DraftManager(draft_id, sleeper_client)
+                        draft_state = draft_manager.initialize_draft()
+                        
+                        # CRITICAL FIX: Set UI refresh callback for auto-refresh
+                        draft_manager.set_ui_refresh_callback(lambda: st.experimental_rerun())
+                        
+                        # CRITICAL FIX: Start monitoring for live updates
+                        draft_manager.start_monitoring(poll_interval=5)
+                        
+                        st.session_state.connected_draft_id = draft_id
+                        st.session_state.draft_manager = draft_manager
+                        st.session_state.draft_state = draft_state
+                        
+                        st.success(f"✅ Connected to draft for {league_name} with live monitoring")
+                        st.experimental_rerun()
+                    else:
+                        st.error("No active draft found for this league")
+                except Exception as e:
+                    st.error(f"Error finding league draft: {str(e)}")
+        else:
+            st.error("Please enter a league ID")
+    
+    # Troubleshooting section (can't use expander inside expander)
+    st.markdown("---")
+    st.markdown("### 🔧 Troubleshooting & Help")
+    
+    with st.container():
+        st.markdown("""
+        **Common Issues:**
+        
+        1. **"No drafts found"** - Make sure:
+           - Your username is spelled correctly
+           - You have active drafts in the selected season
+           - Your drafts aren't private/hidden
+        
+        2. **"Connection failed"** - Try:
+           - Refreshing the page
+           - Using a different connection method
+           - Checking if the draft is still active
+        
+        3. **"Draft ID not found"** - Verify:
+           - The draft ID is complete (usually 18-19 digits)
+           - The draft hasn't been deleted
+           - You have access to the draft
+        
+        **Where to find IDs:**
+        - **Draft ID**: In the URL when viewing a draft on Sleeper
+        - **League ID**: In league settings or league URL
+        - **Username**: Your Sleeper login username (not display name)
+        """)
+
+
 def render_settings():
     """Render settings and configuration"""
     st.markdown("## 🔧 Settings & Configuration")
     
-    with st.expander("🎨 Display Settings", expanded=True):
+    # PROMINENT SLEEPER CONNECTION SECTION
+    with st.expander("🔗 **Sleeper Draft Connection**", expanded=True):
+        st.markdown("### Connect to your live Sleeper draft")
+        render_enhanced_sleeper_connection()
+    
+    with st.expander("🎨 Display Settings"):
         st.slider("Players per page", 10, 100, 50, key="players_per_page_setting")
         st.checkbox("Show advanced metrics", True, key="show_advanced_setting")
         st.checkbox("Dark mode", False, key="dark_mode_setting")
@@ -1015,6 +1490,784 @@ def render_settings():
     with st.expander("🎯 Draft Settings"):
         st.number_input("League size", 8, 16, 12, key="league_size")
         st.selectbox("Scoring", ["PPR", "Half PPR", "Standard"], key="scoring_type")
+
+
+def render_streamlined_available_players(projections_df, draft_manager=None):
+    """
+    P0-3: Streamlined Available Players Table
+    Essential columns only, optimized for quick draft decisions
+    """
+    
+    # ===============================================
+    # FIXED: PROPER AUTO-REFRESH IMPLEMENTATION
+    # ===============================================
+    
+    # Initialize auto-refresh state
+    if 'last_auto_refresh' not in st.session_state:
+        st.session_state.last_auto_refresh = time.time()
+    if 'last_pick_count' not in st.session_state:
+        st.session_state.last_pick_count = 0
+    if 'auto_refresh_interval' not in st.session_state:
+        st.session_state.auto_refresh_interval = 5  # 5 seconds
+    
+    current_time = time.time()
+    current_picks = 0
+    
+    # Get current pick count
+    if draft_manager and hasattr(draft_manager, 'draft_state') and draft_manager.draft_state:
+        current_picks = len(draft_manager.draft_state.picks)
+    
+    # Check if picks have changed (indicating new picks detected)
+    picks_changed = current_picks != st.session_state.last_pick_count
+    if picks_changed:
+        st.session_state.last_pick_count = current_picks
+        st.session_state.last_auto_refresh = current_time
+        # Force immediate refresh when picks change
+        st.success(f"🆕 New pick detected! Total picks: {current_picks}")
+        time.sleep(0.5)  # Brief pause to show the message
+        st.experimental_rerun()
+    
+    # Auto-refresh based on time interval
+    time_since_refresh = current_time - st.session_state.last_auto_refresh
+    should_auto_refresh = (
+        draft_manager and 
+        hasattr(draft_manager, 'is_monitoring') and 
+        draft_manager.is_monitoring and
+        time_since_refresh >= st.session_state.auto_refresh_interval
+    )
+    
+    if should_auto_refresh:
+        st.session_state.last_auto_refresh = current_time
+        st.experimental_rerun()
+    
+    # ===============================================
+    # LIVE DRAFT STATUS AND MANUAL CONTROLS
+    # ===============================================
+    
+    st.markdown("### 🔄 Live Draft Status")
+    
+    if draft_manager and hasattr(draft_manager, 'draft_state') and draft_manager.draft_state:
+        # Status columns
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+        
+        with col1:
+            st.metric("Total Picks", current_picks)
+        
+        with col2:
+            monitoring_status = "🟢 LIVE" if (hasattr(draft_manager, 'is_monitoring') and draft_manager.is_monitoring) else "🔴 PAUSED"
+            st.metric("Status", monitoring_status)
+        
+        with col3:
+            next_refresh = max(0, st.session_state.auto_refresh_interval - time_since_refresh)
+            st.metric("Next Auto-Refresh", f"{next_refresh:.0f}s")
+        
+        with col4:
+            if st.button("🔄 Refresh Now", key="manual_refresh_prominent"):
+                st.session_state.last_auto_refresh = current_time
+                st.experimental_rerun()
+        
+        # Detailed status
+        current_time_str = datetime.now().strftime("%H:%M:%S")
+        is_monitoring = hasattr(draft_manager, 'is_monitoring') and draft_manager.is_monitoring
+        
+        if is_monitoring:
+            st.success(f"✅ **LIVE MONITORING ACTIVE** | Last updated: {current_time_str}")
+        else:
+            st.warning(f"⚠️ **MONITORING PAUSED** | Last updated: {current_time_str}")
+            if st.button("🔄 Restart Monitoring", key="restart_monitoring"):
+                try:
+                    draft_manager.start_monitoring(poll_interval=5)
+                    st.success("✅ Monitoring restarted")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Failed to restart monitoring: {str(e)}")
+        
+        # Auto-refresh settings
+        with st.expander("⚙️ Auto-Refresh Settings"):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                new_interval = st.slider(
+                    "Auto-refresh interval (seconds)",
+                    min_value=3,
+                    max_value=30,
+                    value=st.session_state.auto_refresh_interval,
+                    key="refresh_interval_slider"
+                )
+                if new_interval != st.session_state.auto_refresh_interval:
+                    st.session_state.auto_refresh_interval = new_interval
+                    st.success(f"✅ Auto-refresh set to {new_interval} seconds")
+            
+            with col_b:
+                if st.button("🎯 Force Full Refresh", key="force_full_refresh"):
+                    # Clear caches and force complete refresh
+                    if hasattr(draft_manager, 'monitor'):
+                        draft_manager.monitor.reset_cache()
+                    st.session_state.last_pick_count = 0
+                    st.success("🔄 Full refresh initiated...")
+                    st.experimental_rerun()
+    
+    else:
+        st.info("📊 **Analysis Mode** - Connect to a live draft for real-time updates")
+        if st.button("🔗 Connect to Draft", key="connect_to_draft_btn"):
+            # Switch to settings to connect
+            st.session_state.selected_nav = "🔧 Settings"
+            st.experimental_rerun()
+
+    # ===============================================
+    # Remove broken JavaScript auto-refresh
+    # ===============================================
+    # REMOVED: The broken setTimeout JavaScript that didn't work
+    
+    # Add proper visual indicators
+    st.markdown("""
+    <style>
+    .live-indicator {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        background: #10b981;
+        color: white;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-size: 12px;
+        z-index: 1000;
+        animation: pulse 2s infinite;
+    }
+    .monitoring-indicator {
+        background: #3b82f6;
+        color: white;
+        padding: 8px 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        text-align: center;
+        font-weight: 600;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+    }
+    .pick-count-display {
+        background: #3b82f6;
+        color: white;
+        padding: 8px 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        text-align: center;
+        font-weight: 600;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ===============================================
+    # REST OF THE EXISTING FUNCTION CONTINUES...
+    # ===============================================
+    
+    # CSS for streamlined table (keeping existing styles)
+    st.markdown("""
+    <style>
+    .available-players-header {
+        background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 10px 10px 0 0;
+        margin: 0;
+        text-align: center;
+    }
+    .player-filters {
+        background: #f8fafc;
+        padding: 15px;
+        border: 1px solid #e2e8f0;
+        border-radius: 0 0 10px 10px;
+        margin-bottom: 10px;
+    }
+    .position-badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 11px;
+        color: white;
+        margin-right: 5px;
+    }
+    .position-QB { background: #dc2626; }
+    .position-RB { background: #059669; }
+    .position-WR { background: #2563eb; }
+    .position-TE { background: #ea580c; }
+    .position-K { background: #7c3aed; }
+    .position-DEF { background: #374151; }
+    .position-DST { background: #374151; }
+    .tier-indicator {
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 10px;
+        font-weight: 600;
+    }
+    .tier-1 { background: #fee2e2; color: #991b1b; }
+    .tier-2 { background: #fef3c7; color: #92400e; }
+    .tier-3 { background: #dcfce7; color: #166534; }
+    .tier-4 { background: #ddd6fe; color: #5b21b6; }
+    .tier-5 { background: #e5e7eb; color: #374151; }
+    .value-indicator {
+        font-weight: 600;
+        font-size: 12px;
+    }
+    .value-great { color: #059669; }
+    .value-good { color: #0891b2; }
+    .value-ok { color: #7c3aed; }
+    .value-reach { color: #dc2626; }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Live monitoring indicator (only show if actively monitoring)
+    if draft_manager and hasattr(draft_manager, 'is_monitoring') and draft_manager.is_monitoring:
+        st.markdown("""
+        <div class="live-indicator">
+            🔄 LIVE
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Get available players
+    available_players = projections_df.copy()
+    
+    # Filter out drafted players if draft manager available
+    drafted_count = 0
+    if draft_manager and hasattr(draft_manager, 'draft_state') and draft_manager.draft_state:
+        drafted_players = {pick.player_name for pick in draft_manager.draft_state.picks}
+        available_players = available_players[~available_players['player_name'].isin(drafted_players)]
+        drafted_count = len(drafted_players)
+    
+    # Header with draft status and pick count
+    current_time = datetime.now().strftime("%H:%M:%S")
+    monitoring_status = "🔄 LIVE" if (draft_manager and hasattr(draft_manager, 'is_monitoring') and draft_manager.is_monitoring) else "⏸️ PAUSED"
+    
+    # Display current pick count prominently
+    if draft_manager and hasattr(draft_manager, 'draft_state') and draft_manager.draft_state:
+        current_pick = draft_manager.draft_state.current_pick
+        total_picks = len(draft_manager.draft_state.picks)
+        st.markdown(f"""
+        <div class="pick-count-display">
+            📊 Current Pick: {current_pick} | Total Picks Made: {total_picks}
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown(f"""
+    <div class="available-players-header">
+        <h3>⚡ Available Players</h3>
+        <p>{monitoring_status} | Last updated: {current_time} | {drafted_count} players drafted</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Filters section
+    with st.container():
+        st.markdown('<div class="player-filters">', unsafe_allow_html=True)
+        
+        col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
+        
+        with col1:
+            # Position filter
+            all_positions = ['All'] + sorted(available_players['position'].unique().tolist())
+            selected_position = st.selectbox(
+                "Position",
+                all_positions,
+                key="streamlined_position_filter"
+            )
+        
+        with col2:
+            # Hide picked players toggle
+            hide_picked = st.checkbox(
+                "Hide Drafted Players",
+                value=True,
+                key="hide_drafted_toggle"
+            )
+        
+        with col3:
+            # Tier filter
+            if 'tier' in available_players.columns:
+                all_tiers = ['All'] + sorted([str(t) for t in available_players['tier'].unique() if pd.notna(t)])
+                selected_tier = st.selectbox(
+                    "Tier",
+                    all_tiers,
+                    key="streamlined_tier_filter"
+                )
+            else:
+                selected_tier = 'All'
+        
+        with col4:
+            # View toggle
+            view_mode = st.selectbox(
+                "View Mode",
+                ["Enhanced Cards", "Data Table"],
+                key="view_mode_toggle"
+            )
+            
+        # Quick search (full width)
+        search_term = st.text_input(
+            "Quick Search",
+            placeholder="Player name...",
+            key="streamlined_search"
+        )
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Apply filters
+    filtered_players = available_players.copy()
+    
+    if selected_position != 'All':
+        filtered_players = filtered_players[filtered_players['position'] == selected_position]
+    
+    if selected_tier != 'All':
+        if 'tier' in filtered_players.columns:
+            filtered_players = filtered_players[filtered_players['tier'].astype(str) == selected_tier]
+    
+    if search_term:
+        filtered_players = filtered_players[
+            filtered_players['player_name'].str.contains(search_term, case=False, na=False)
+        ]
+    
+    # Limit to top results for performance
+    display_players = filtered_players.head(50)  # Top 50 for speed
+    
+    if display_players.empty:
+        st.warning("No players match your filters")
+        return
+    
+    # ESSENTIAL COLUMNS FOR DRAFT DECISIONS - INCLUDING VORP AND ADP
+    essential_columns = {
+        'player_name': 'Player',
+        'position': 'Pos',
+        'team': 'Team',
+        'projected_points': 'Proj',
+        'overall_rank': 'Rank'
+    }
+    
+    # Add critical decision-making columns
+    critical_columns = {}
+    
+    # VORP columns (prioritize static VORP for basic display, dynamic when available)
+    if 'vorp_score' in display_players.columns:
+        critical_columns['vorp_score'] = 'VORP'
+    elif 'static_vorp' in display_players.columns:
+        critical_columns['static_vorp'] = 'VORP'
+    elif 'dynamic_vorp_final' in display_players.columns:
+        critical_columns['dynamic_vorp_final'] = 'VORP'
+    elif 'dynamic_vorp' in display_players.columns:
+        critical_columns['dynamic_vorp'] = 'VORP'
+    
+    # ADP columns (prioritize SFB15 ADP)
+    if 'sfb15_adp' in display_players.columns:
+        critical_columns['sfb15_adp'] = 'ADP'
+    elif 'consensus_adp' in display_players.columns:
+        critical_columns['consensus_adp'] = 'ADP'
+    elif 'current_adp' in display_players.columns:
+        critical_columns['current_adp'] = 'ADP'
+    elif 'adp' in display_players.columns:
+        critical_columns['adp'] = 'ADP'
+    
+    # Add optional columns if available
+    optional_columns = {}
+    if 'tier' in display_players.columns:
+        optional_columns['tier'] = 'Tier'
+    
+    # Combine columns in priority order
+    display_columns = {**essential_columns, **critical_columns, **optional_columns}
+    
+    # Create display dataframe
+    available_cols = [col for col in display_columns.keys() if col in display_players.columns]
+    display_df = display_players[available_cols].copy()
+    
+    # Rename columns
+    column_mapping = {col: display_columns[col] for col in available_cols}
+    display_df = display_df.rename(columns=column_mapping)
+    
+    # Format numeric columns
+    for col in display_df.columns:
+        if col in ['Proj', 'VORP', 'ADP', 'SFB ADP'] and col in display_df.columns:
+            display_df[col] = pd.to_numeric(display_df[col], errors='coerce').round(1)
+    
+    # Custom rendering for better mobile experience
+    st.markdown("### 📋 Available Players")
+    
+    # Show player count and key metrics
+    total_available = len(available_players)
+    showing_count = len(display_df)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Available", f"{total_available}")
+    with col2:
+        st.metric("Showing", f"{showing_count}")
+    with col3:
+        st.metric("Drafted", f"{drafted_count}")
+    
+    # Render based on selected view mode
+    if view_mode == "Enhanced Cards":
+        # Enhanced CSS for better visual design
+        st.markdown("""
+        <style>
+        .player-card {
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 8px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .player-info {
+            margin-bottom: 12px;
+        }
+        .player-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1a202c;
+            margin-left: 8px;
+        }
+        .player-team {
+            color: #64748b;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .stat-item {
+            text-align: center;
+            padding: 8px;
+            background: #f8fafc;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+        }
+        .stat-label {
+            font-size: 11px;
+            color: #64748b;
+            font-weight: 500;
+            margin-bottom: 2px;
+        }
+        .stat-value {
+            font-size: 14px;
+            font-weight: 700;
+            color: #1a202c;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Render players in an enhanced card format
+        for idx, player in display_df.iterrows():
+            # Get player data
+            pos = player.get('Pos', 'UNK')
+            player_name = player.get('Player', 'Unknown')
+            team = player.get('Team', 'FA')
+            proj = player.get('Proj', 0)
+            vorp = player.get('VORP', 0)
+            adp = player.get('ADP', 0)
+            rank = player.get('Rank', 'N/A')
+            tier = player.get('Tier', 'N/A')
+            
+            # Value assessment
+            if vorp > 20:
+                value_class = "value-great"
+                value_text = "🔥 Elite"
+                badge_color = "#10b981"
+            elif vorp > 10:
+                value_class = "value-good"
+                value_text = "⭐ Good"
+                badge_color = "#3b82f6"
+            elif vorp > 0:
+                value_class = "value-ok"
+                value_text = "✓ OK"
+                badge_color = "#6366f1"
+            else:
+                value_class = "value-reach"
+                value_text = "⚠️ Reach"
+                badge_color = "#ef4444"
+            
+            # Enhanced player card with better visual hierarchy
+            with st.container():
+                # Create a more prominent card container
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+                    border: 2px solid #e2e8f0;
+                    border-radius: 12px;
+                    padding: 20px;
+                    margin: 16px 0;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+                    position: relative;
+                ">
+                    <div style="display: flex; align-items: center; margin-bottom: 16px;">
+                        <span class="position-badge position-{pos}" style="
+                            font-size: 16px; 
+                            padding: 8px 12px; 
+                            margin-right: 12px;
+                            font-weight: 700;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        ">{pos}</span>
+                        <div>
+                            <div style="font-size: 24px; font-weight: 800; color: #1a202c; line-height: 1.2;">
+                                {player_name}
+                            </div>
+                            <div style="font-size: 16px; color: #64748b; font-weight: 500;">
+                                {team} • Rank #{rank}{f" • Tier {tier}" if tier != 'N/A' else ""}
+                            </div>
+                        </div>
+                        <div style="margin-left: auto;">
+                            <span style="
+                                background-color: {badge_color}; 
+                                color: white; 
+                                padding: 6px 12px; 
+                                border-radius: 8px; 
+                                font-size: 14px; 
+                                font-weight: 600;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                            ">{value_text}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Stats in a clean row below the header
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric("🎯 Projection", f"{proj:.1f} pts", help="Projected fantasy points")
+                
+                with col_b:
+                    st.metric("📊 VORP", f"{vorp:.1f}", help="Value Over Replacement Player")
+                
+                with col_c:
+                    adp_display = f"{adp:.1f}" if adp else "N/A"
+                    st.metric("📋 ADP", adp_display, help="Average Draft Position")
+                
+                st.markdown("<br>", unsafe_allow_html=True)  # Clean spacing
+    
+    else:  # Data Table view
+        st.dataframe(
+            display_df,
+            height=600
+        )
+
+
+def render_position_recommendation_tiles(projections_df, draft_manager=None):
+    """
+    P0-4: Position Recommendation Tiles
+    Quick visual guidance for best available by position
+    """
+    
+    st.markdown("### 🎯 Best Available by Position")
+    
+    # Get available players (filter out drafted if connected to live draft)
+    available_players = projections_df.copy()
+    
+    if draft_manager and hasattr(draft_manager, 'draft_state') and draft_manager.draft_state:
+        drafted_players = {pick.player_name for pick in draft_manager.draft_state.picks}
+        available_players = available_players[~available_players['player_name'].isin(drafted_players)]
+    
+    # Define position order and colors
+    positions = ['QB', 'RB', 'WR', 'TE']
+    position_colors = {
+        'QB': '#dc2626',   # Red
+        'RB': '#059669',   # Green  
+        'WR': '#2563eb',   # Blue
+        'TE': '#ea580c'    # Orange
+    }
+    
+    # Add CSS for recommendation tiles
+    st.markdown("""
+    <style>
+    .recommendation-tile {
+        background: linear-gradient(135deg, var(--position-color) 0%, var(--position-color-dark) 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 12px;
+        margin: 10px 0;
+        text-align: center;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: transform 0.2s, box-shadow 0.2s;
+        cursor: pointer;
+    }
+    .recommendation-tile:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+    }
+    .tile-position {
+        font-size: 14px;
+        font-weight: 600;
+        opacity: 0.9;
+        margin-bottom: 5px;
+    }
+    .tile-player {
+        font-size: 20px;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+    .tile-projection {
+        font-size: 16px;
+        margin-bottom: 5px;
+    }
+    .tile-rank {
+        font-size: 14px;
+        opacity: 0.9;
+    }
+    .tile-vorp {
+        font-size: 14px;
+        margin-top: 5px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    .recommendation-header {
+        text-align: center;
+        margin-bottom: 20px;
+        padding: 15px;
+        background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%);
+        color: white;
+        border-radius: 10px;
+    }
+    .no-players {
+        text-align: center;
+        color: #6b7280;
+        font-style: italic;
+        padding: 40px;
+        background: #f9fafb;
+        border-radius: 8px;
+        border: 2px dashed #d1d5db;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    if available_players.empty:
+        st.markdown("""
+        <div class="no-players">
+            <h3>🎉 Draft Complete!</h3>
+            <p>All players have been drafted or no projection data available</p>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+    
+    # Create 4-column layout for position tiles
+    cols = st.columns(4)
+    
+    for i, position in enumerate(positions):
+        with cols[i]:
+            # Get best available player for this position
+            position_players = available_players[available_players['position'] == position]
+            
+            if not position_players.empty:
+                # Sort by overall rank or projected points to get the best
+                if 'overall_rank' in position_players.columns:
+                    best_player = position_players.nsmallest(1, 'overall_rank').iloc[0]
+                elif 'projected_points' in position_players.columns:
+                    best_player = position_players.nlargest(1, 'projected_points').iloc[0]
+                else:
+                    best_player = position_players.iloc[0]
+                
+                # Get player stats
+                player_name = best_player['player_name']
+                projected_points = best_player.get('projected_points', 0)
+                overall_rank = best_player.get('overall_rank', 'N/A')
+                
+                # Get VORP info if available (prioritize static VORP for initial display)
+                vorp_score = best_player.get('vorp_score',
+                            best_player.get('static_vorp', 
+                            best_player.get('dynamic_vorp_final', 
+                            best_player.get('dynamic_vorp', 0))))
+                
+                # Get ADP for value assessment
+                adp_value = best_player.get('sfb15_adp', 
+                           best_player.get('current_adp', 
+                           best_player.get('adp', None)))
+                
+                # Color for the tile
+                color = position_colors[position]
+                color_dark = {
+                    'QB': '#991b1b',
+                    'RB': '#047857', 
+                    'WR': '#1d4ed8',
+                    'TE': '#c2410c'
+                }[position]
+                
+                # Create the recommendation tile
+                st.markdown(f"""
+                <div class="recommendation-tile" 
+                     style="--position-color: {color}; --position-color-dark: {color_dark};">
+                    <div class="tile-position">{position}</div>
+                    <div class="tile-player">{player_name}</div>
+                    <div class="tile-projection">{projected_points:.1f} pts</div>
+                    <div class="tile-rank">Overall: #{overall_rank}</div>
+                    <div class="tile-vorp">VORP: {vorp_score:.1f}{' | ADP: ' + str(int(adp_value)) if adp_value else ''}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Add quick draft button below tile
+                if st.button(f"📋 View {position} Details", 
+                            key=f"view_{position}_details",
+                            help=f"See more {position} options"):
+                    # Show position breakdown in expander
+                    with st.expander(f"📊 All Available {position}s", expanded=True):
+                        # Show top 5 players at this position
+                        top_position_players = position_players.head(5)
+                        
+                        for idx, (_, player) in enumerate(top_position_players.iterrows()):
+                            rank_suffix = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][idx] if idx < 5 else f"{idx+1}."
+                            
+                            col_a, col_b, col_c = st.columns([3, 1, 1])
+                            with col_a:
+                                st.write(f"{rank_suffix} **{player['player_name']}**")
+                            with col_b:
+                                st.write(f"{player.get('projected_points', 0):.1f} pts")
+                            with col_c:
+                                st.write(f"Rank #{player.get('overall_rank', 'N/A')}")
+            
+            else:
+                # No players available at this position
+                st.markdown(f"""
+                <div class="recommendation-tile" 
+                     style="--position-color: #6b7280; --position-color-dark: #4b5563;">
+                    <div class="tile-position">{position}</div>
+                    <div class="tile-player">None Available</div>
+                    <div class="tile-projection">All drafted</div>
+                    <div class="tile-rank">Position complete</div>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # Add quick actions row
+    st.markdown("---")
+    
+    # Quick action buttons
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("🔥 Best Overall Pick", key="best_overall"):
+            if not available_players.empty:
+                if 'overall_rank' in available_players.columns:
+                    best_overall = available_players.nsmallest(1, 'overall_rank').iloc[0]
+                else:
+                    best_overall = available_players.nlargest(1, 'projected_points').iloc[0]
+                
+                st.success(f"🔥 **Best Overall**: {best_overall['player_name']} ({best_overall['position']}) - {best_overall.get('projected_points', 0):.1f} pts")
+    
+    with col2:
+        if st.button("💎 Best Value Pick", key="best_value"):
+            if not available_players.empty and 'vorp_score' in available_players.columns:
+                best_value = available_players.nlargest(1, 'vorp_score').iloc[0]
+                st.success(f"💎 **Best Value**: {best_value['player_name']} ({best_value['position']}) - VORP: {best_value.get('vorp_score', 0):.1f}")
+    
+    with col3:
+        if st.button("🎯 Positional Need", key="positional_need"):
+            # Simple position scarcity analysis
+            position_counts = available_players['position'].value_counts()
+            if not position_counts.empty:
+                scarcest_position = position_counts.idxmin()
+                scarcest_count = position_counts.min()
+                st.warning(f"🎯 **Scarcest Position**: {scarcest_position} ({scarcest_count} remaining)")
+    
+    with col4:
+        if st.button("⚡ Sleeper Alert", key="sleeper_alert"):
+            # Find potential sleepers (high projection, low ADP)
+            if 'adp' in available_players.columns and 'projected_points' in available_players.columns:
+                # Simple sleeper logic: good projection but drafted later
+                sleepers = available_players[
+                    (available_players.get('adp', 999) > 100) & 
+                    (available_players.get('projected_points', 0) > 150)
+                ]
+                if not sleepers.empty:
+                    sleeper = sleepers.iloc[0]
+                    st.info(f"⚡ **Sleeper Alert**: {sleeper['player_name']} ({sleeper['position']}) - Late ADP value")
 
 
 def main():
@@ -1048,7 +2301,7 @@ def main():
          padding: 20px;
          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
          text-align: center;
-     }
+    }
      .metric-card h3 {
          color: #1a202c;
          font-weight: 700;
@@ -1116,8 +2369,23 @@ def main():
         </div>
         """, unsafe_allow_html=True)
     
+    # Check if connected to draft for auto-navigation
+    is_connected = hasattr(st.session_state, 'connected_draft_id') and st.session_state.connected_draft_id
+    
     # Main navigation
     selected_nav = render_navigation()
+    
+    # Auto-switch to Live Draft Mode if connected (P0-5: Draft Mode State Management)
+    if is_connected and selected_nav not in ["🔧 Settings"]:
+        # Show connection status in header
+        st.success(f"🟢 **LIVE DRAFT MODE** - Connected to Draft: {st.session_state.connected_draft_id}")
+        if hasattr(st.session_state, 'draft_username'):
+            st.info(f"👤 Username: {st.session_state.draft_username} | Go to Settings to disconnect")
+        
+        # Force Live Draft mode when connected
+        if selected_nav != "🎯 Live Draft":
+            st.info("🎯 **Auto-switched to Live Draft Mode** - You're connected to an active draft!")
+        selected_nav = "🎯 Live Draft"
     
     # Render selected view
     if selected_nav == "🏈 Player Analysis":
@@ -1125,104 +2393,123 @@ def main():
     
     elif selected_nav == "🎯 Live Draft":
         st.markdown("## 🎯 Live Draft Mode")
-        render_draft_connection()
         
         # Check if connected to a draft
         is_connected = hasattr(st.session_state, 'connected_draft_id') and st.session_state.connected_draft_id
         
-        st.markdown("---")
+        if not is_connected:
+            st.warning("🔴 **Not Connected to Draft**")
+            st.info("👉 Go to **Settings** to connect to your Sleeper draft")
+            
+            # Quick connection option
+            with st.expander("🔗 Quick Connect", expanded=False):
+                st.markdown("*For quick access, enter your draft ID here:*")
+                quick_draft_id = st.text_input("Draft ID", placeholder="Enter Sleeper draft ID", key="quick_draft_id")
+                if st.button("⚡ Quick Connect", key="quick_connect"):
+                    if quick_draft_id:
+                        try:
+                            from src.draft.draft_manager import DraftManager
+                            from src.draft.sleeper_client import SleeperClient
+                            
+                            sleeper_client = SleeperClient()
+                            draft_manager = DraftManager(quick_draft_id, sleeper_client)
+                            draft_state = draft_manager.initialize_draft()
+                            
+                            st.session_state.connected_draft_id = quick_draft_id
+                            st.session_state.draft_manager = draft_manager
+                            st.session_state.draft_state = draft_state
+                            
+                            st.success(f"✅ Connected to draft {quick_draft_id}")
+                            st.experimental_rerun()
+                        except Exception as e:
+                            st.error(f"Connection failed: {str(e)}")
+                            st.info("Use Settings for more connection options")
+                    else:
+                        st.error("Please enter a draft ID")
+            
+            return
         
+        # CONNECTED - Show Live Draft Interface
         if is_connected:
-            st.markdown("### 🎯 Live Draft Interface")
-            st.success(f"🟢 Connected to Draft: {st.session_state.connected_draft_id}")
+            # Get draft manager from session state
+            draft_manager = st.session_state.get('draft_manager')
+            
+            if not draft_manager:
+                st.warning("🔄 Initializing draft manager...")
+                try:
+                    from src.draft.draft_manager import DraftManager
+                    draft_manager = DraftManager(st.session_state.connected_draft_id)
+                    draft_state = draft_manager.initialize_draft()
+                    
+                    # CRITICAL FIX: Set UI refresh callback for auto-refresh
+                    draft_manager.set_ui_refresh_callback(lambda: st.experimental_rerun())
+                    
+                    # CRITICAL FIX: Start monitoring for live updates
+                    draft_manager.start_monitoring(poll_interval=5)  # Check every 5 seconds
+                    
+                    st.session_state.draft_manager = draft_manager
+                    st.session_state.draft_state = draft_state
+                    st.success("✅ Draft manager initialized with live monitoring")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Failed to initialize draft manager: {str(e)}")
+                    return
+            
+            # P0-2: VISUAL DRAFT BOARD INTERFACE
+            st.markdown("## 🏈 Live Draft Board")
+            
+            # Render the visual draft board
+            try:
+                render_visual_draft_board(draft_manager, projections_df)
+            except Exception as e:
+                st.error(f"Error rendering draft board: {str(e)}")
+                # Fallback to simple board
+                st.markdown("### 📋 Draft Summary (Fallback)")
+                if hasattr(draft_manager, 'draft_state') and draft_manager.draft_state:
+                    recent_picks = draft_manager.draft_state.picks[-10:] if draft_manager.draft_state.picks else []
+                    if recent_picks:
+                        st.markdown("**Recent Picks:**")
+                        for pick in recent_picks:
+                            st.text(f"Pick {pick.pick_number}: {pick.player_name} ({pick.position}) - Round {pick.round}")
+                    else:
+                        st.info("No picks made yet")
+                else:
+                    st.warning("Draft state not available")
+            
+            st.markdown("---")
+            
+            # P0-4: POSITION RECOMMENDATION TILES (NEW FEATURE)
+            try:
+                render_position_recommendation_tiles(projections_df, draft_manager)
+                st.markdown("---")
+            except Exception as e:
+                st.error(f"Error rendering position tiles: {str(e)}")
+            
+            # P0-3: STREAMLINED AVAILABLE PLAYERS TABLE (PRIMARY INTERFACE)
+            st.markdown("## ⚡ Available Players")
             
             try:
-                # Use existing LiveDraftView component
-                from src.dashboard.components.live_draft_view import LiveDraftView
+                # Render streamlined available players table
+                render_streamlined_available_players(projections_df, draft_manager)
                 
-                # Initialize draft manager if not already done
-                if not hasattr(st.session_state, 'draft_manager'):
-                    from src.draft.draft_manager import DraftManager
-                    st.session_state.draft_manager = DraftManager(st.session_state.connected_draft_id)
+            except Exception as table_error:
+                st.error(f"Error rendering streamlined table: {str(table_error)}")
+                # Simple fallback
+                st.markdown("### 📋 Basic Available Players")
+                available_players = projections_df.copy()
+                if draft_manager and hasattr(draft_manager, 'draft_state') and draft_manager.draft_state:
+                    drafted_players = {pick.player_name for pick in draft_manager.draft_state.picks}
+                    available_players = available_players[~available_players['player_name'].isin(drafted_players)]
                 
-                # Render live draft view
-                live_draft_view = LiveDraftView(projections_df)
-                live_draft_view.render()
-                
-            except ImportError as e:
-                st.error(f"Live draft components not available: {str(e)}")
-                # Fallback interface
-                st.markdown("### 🎮 Draft Interface (Simplified)")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("🎯 Best Available")
-                    best_available = projections_df.head(10)[
+                if not available_players.empty:
+                    basic_display = available_players.head(20)[
                         ['player_name', 'position', 'team', 'projected_points', 'overall_rank']
                     ]
-                    best_available.columns = ['Player', 'Pos', 'Team', 'Proj Pts', 'Rank']
-                    best_available['Proj Pts'] = best_available['Proj Pts'].round(1)
-                    st.dataframe(best_available.reset_index(drop=True))
-                
-                with col2:
-                    st.subheader("📊 Position Needs")
-                    st.info("Position analysis would show here based on your roster")
-                    
-                    # Mock position needs
-                    needs_data = {
-                        'Position': ['RB', 'WR', 'QB', 'TE'],
-                        'Need Level': ['High', 'Medium', 'Low', 'Low'],
-                        'Best Available': ['Player A', 'Player B', 'Player C', 'Player D']
-                    }
-                    st.dataframe(pd.DataFrame(needs_data))
-                
-                # Mock pick interface
-                st.markdown("### ⚡ Quick Pick")
-                recommended_pick = projections_df.iloc[0]
-                
-                col_a, col_b, col_c = st.columns([2, 1, 1])
-                
-                with col_a:
-                    st.markdown(f"**Recommended:** {recommended_pick['player_name']} ({recommended_pick['position']})")
-                    st.markdown(f"Projected: {recommended_pick['projected_points']:.1f} points")
-                
-                with col_b:
-                    if st.button("✅ Draft Player", key="draft_recommended"):
-                        st.success(f"Drafted {recommended_pick['player_name']}!")
-                
-                with col_c:
-                    if st.button("🔄 Refresh", key="refresh_picks"):
-                        st.experimental_rerun()
-            
-            except Exception as e:
-                st.error(f"Error loading live draft interface: {str(e)}")
-                st.info("Please check your draft connection and try again.")
+                    st.dataframe(basic_display)
+                else:
+                    st.info("No available players found")
         
-        else:
-            st.markdown("### 🔌 Not Connected")
-            st.info("Connect to a draft above to access the live draft interface")
-            
-            # Preview interface
-            st.markdown("### 🎮 Interface Preview")
-            st.info("This is what the live draft interface will look like:")
-            
-            # Show preview of Pick Now view
-            try:
-                from src.dashboard.components.draft_mode.pick_now_view import render_pick_now_view
-                st.markdown("**Pick Now View Preview:**")
-                with st.container():
-                    st.markdown("🎯 **PICK NOW** - 15 seconds remaining")
-                    
-                    # Mock recommendation
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.success("🔥 **ELITE TIER** - Josh Allen (QB) - 24.8 projected points")
-                    with col2:
-                        st.button("DRAFT NOW", key="preview_draft", disabled=True)
-                        
-            except ImportError:
-                st.markdown("**Preview:** Elite decision interface with <5 second recommendations")
+                st.markdown("---")
     
     elif selected_nav == "🎮 Mock Draft":
         st.markdown("## 🎮 Mock Draft Mode")
@@ -1246,7 +2533,7 @@ def main():
     st.markdown("""
     <div style='text-align: center; color: #666; font-size: 14px; padding: 20px;'>
         🏈 <strong>SFB15 Draft Command Center</strong> • Enhanced ML Projections<br>
-        Built for optimal draft decisions under pressure • Phase 1 Implementation Complete
+        Built for optimal draft decisions under pressure • P0 Auto-Refresh Fixed ✅
     </div>
     """, unsafe_allow_html=True)
 

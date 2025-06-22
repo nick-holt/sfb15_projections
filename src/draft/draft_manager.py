@@ -54,6 +54,9 @@ class DraftManager:
         self._pick_callbacks: List[Callable[[DraftPick], None]] = []
         self._state_callbacks: List[Callable[[DraftState], None]] = []
         
+        # UI callback for Streamlit auto-refresh
+        self._ui_refresh_callback: Optional[Callable[[], None]] = None
+        
         # Player name mapping for projections integration
         self._player_name_map: Dict[str, str] = {}  # sleeper_name -> projection_name
         
@@ -204,6 +207,14 @@ class DraftManager:
                             callback(self.draft_state)
                         except Exception as e:
                             logger.error(f"Error in state callback: {e}")
+                    
+                    # CRITICAL FIX: Trigger UI refresh when picks detected
+                    if self._ui_refresh_callback:
+                        try:
+                            logger.info(f"Triggering UI refresh for {len(new_picks)} new picks")
+                            self._ui_refresh_callback()
+                        except Exception as e:
+                            logger.error(f"Error in UI refresh callback: {e}")
                 
                 # Check if draft is complete
                 if self.draft_state.is_draft_complete():
@@ -334,6 +345,27 @@ class DraftManager:
     def add_state_callback(self, callback: Callable[[DraftState], None]):
         """Add callback for draft state changes"""
         self._state_callbacks.append(callback)
+    
+    def set_ui_refresh_callback(self, callback: Callable[[], None]):
+        """
+        Set UI refresh callback for Streamlit integration
+        
+        Args:
+            callback: Function to call when UI refresh is needed (e.g., st.experimental_rerun)
+        """
+        self._ui_refresh_callback = callback
+        logger.info("UI refresh callback registered")
+    
+    def trigger_ui_refresh(self):
+        """Manually trigger UI refresh if callback is set"""
+        if self._ui_refresh_callback:
+            try:
+                logger.info("Manually triggering UI refresh")
+                self._ui_refresh_callback()
+            except Exception as e:
+                logger.error(f"Error in manual UI refresh: {e}")
+        else:
+            logger.warning("No UI refresh callback set")
     
     def get_draft_board(self) -> List[List[Optional[DraftPick]]]:
         """
