@@ -439,7 +439,7 @@ class DraftManager:
                     'player_name': pick.player_name,
                     'position': pick.position,
                     'team': pick.team,
-                    'drafted_by': self.draft_state.rosters.get(pick.roster_id, {}).owner_name or 'Unknown'
+                    'drafted_by': getattr(self.draft_state.rosters.get(pick.roster_id), 'owner_name', 'Unknown') or 'Unknown'
                 }
                 for pick in self.draft_state.picks[-10:]  # Last 10 picks
             ]

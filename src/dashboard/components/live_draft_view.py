@@ -188,7 +188,7 @@ class LiveDraftView:
                         'Player': pick.player_name,
                         'Position': pick.position,
                         'Team': pick.team,
-                        'Owner': draft_state.rosters.get(pick.roster_id, {}).owner_name or 'Unknown'
+                        'Owner': getattr(draft_state.rosters.get(pick.roster_id), 'owner_name', 'Unknown') or 'Unknown'
                     })
         
         if board_data:
@@ -209,12 +209,12 @@ class LiveDraftView:
                 height=600
             )
             
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig)
             
             # Recent picks table
             st.subheader("Recent Picks")
             recent_picks = board_df.tail(10).sort_values('Round', ascending=False)
-            st.dataframe(recent_picks, use_container_width=True)
+            st.dataframe(recent_picks)
     
     def _render_team_analysis(self, draft_state: DraftState):
         """Render team-by-team analysis"""
@@ -264,7 +264,7 @@ class LiveDraftView:
                 needs_df = pd.DataFrame(needs_data)
                 fig = px.bar(needs_df, x='Position', y='Still Need', 
                            title="Remaining Positional Needs")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig)
             else:
                 st.success("✅ All positional needs filled!")
             
@@ -272,7 +272,7 @@ class LiveDraftView:
             if team_analysis['recent_picks']:
                 st.subheader("Recent Picks")
                 recent_df = pd.DataFrame(team_analysis['recent_picks'])
-                st.dataframe(recent_df, use_container_width=True)
+                st.dataframe(recent_df)
     
     def _render_live_recommendations(self, draft_state: DraftState):
         """Render live draft recommendations with dynamic VORP"""
@@ -650,7 +650,7 @@ class LiveDraftView:
             color='position',
             title="Position Distribution by Round"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig)
         
         # Team drafting patterns
         team_picks = []
@@ -675,7 +675,7 @@ class LiveDraftView:
                 title="Positional Picks by Team"
             )
             fig.update_xaxes(tickangle=45)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig)
     
     def _render_getting_started(self):
         """Render getting started guide"""
